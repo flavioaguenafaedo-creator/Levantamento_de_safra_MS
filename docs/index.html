@@ -107,7 +107,7 @@ const PALETA_USO=["#e3b23c","#4f8a3c","#9ccf7f","#d4694a","#6d8fbf","#a37fbf","#
 
 const mapa=L.map('mapa',{zoomControl:true,preferCanvas:true}).setView([-20.6,-54.6],7);
 const fundos={
-  claro:L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',{attribution:'Mapa base © Esri',maxZoom:16}),
+ claro:L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',{attribution:'Mapa base © Esri',maxZoom:16}),
  sat:L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{attribution:'Imagens © Esri',maxZoom:18})
 };
 let fundoAtual=fundos.claro.addTo(mapa);
@@ -168,18 +168,29 @@ Promise.all([pegar('dados/manifesto.json'),pegar('dados/municipios.geojson'),peg
     mapa.fitBounds(camMun.getBounds(),{padding:[10,10]});
     document.getElementById('lista-mun').innerHTML=mun.features.map(f=>f.properties.NM_MUN).sort((a,b)=>a.localeCompare(b,'pt')).map(n=>`<option value="${n}">`).join('');
   }
-  // camadas de uso do solo publicadas pelo processamento (uso_*.geojson)
-  for(const nome of (man?.camadas||[]).filter(c=>c.startsWith('uso_'))){
-    const d=await pegar(`dados/${nome}.geojson`);if(!d)continue;
-    const classes=[...new Set(d.features.map(f=>f.properties.classe))];
-    const cor=c=>PALETA_USO[classes.indexOf(c)%PALETA_USO.length];
-    const cam=L.geoJSON(d,{pane:'usos',style:f=>({fillColor:cor(f.properties.classe),fillOpacity:.75,weight:0}),
-      onEachFeature:(f,l)=>l.bindPopup(`<b>${f.properties.classe}</b>`)});
-    const id='c-'+nome;
-    document.getElementById('usos').insertAdjacentHTML('beforeend',`<label class="cam"><input type="checkbox" id="${id}"> Uso do solo · ${nome.slice(4).replace(/_/g,' ')}</label>
-      <div class="leg">${classes.slice(0,12).map(c=>`<div><i style="background:${cor(c)}"></i>${c}</div>`).join('')}</div>`);
-    document.getElementById(id).onchange=e=>e.target.checked?cam.addTo(mapa):mapa.removeLayer(cam);
-    document.querySelector('.prox').style.display='none';
+  // camadas de uso do solo publicadas pelo processamento (uso_*.geojson) — carregadas só quando ligadas
+  const CORES_USO={"Soja":"#e0a526","Cana-de-açúcar":"#3f9a5a","Milho":"#d4694a","Pastagem":"#c9d99a",
+    "Remanescente/vegetação":"#2f5d3a","Eucalipto":"#6d8fbf","Pinus":"#a37fbf","Seringueira":"#8a6f4e","Outros usos":"#bdbdbd"};
+  const usos=(man?.camadas||[]).filter(c=>c.startsWith('uso_'));
+  if(usos.length)document.querySelector('.prox').style.display='none';
+  for(const nome of usos){
+    const id='c-'+nome, rot=nome.slice(4).replace(/_/g,' ');
+    document.getElementById('usos').insertAdjacentHTML('beforeend',
+      `<label class="cam"><input type="checkbox" id="${id}"> ${rot.charAt(0).toUpperCase()+rot.slice(1)} <span class="vazio" id="${id}-st"></span></label><div class="leg" id="${id}-leg"></div>`);
+    let cam=null;
+    document.getElementById(id).onchange=async e=>{
+      if(!e.target.checked){cam&&mapa.removeLayer(cam);return;}
+      if(!cam){
+        const st=document.getElementById(id+'-st');st.textContent='carregando…';
+        const d=await pegar(`dados/${nome}.geojson`);st.textContent='';if(!d)return;
+        const classes=[...new Set(d.features.map(f=>f.properties.classe))];
+        const cor=c=>CORES_USO[c]||PALETA_USO[classes.indexOf(c)%PALETA_USO.length];
+        cam=L.geoJSON(d,{pane:'usos',style:f=>({fillColor:cor(f.properties.classe),fillOpacity:.85,weight:0}),
+          onEachFeature:(f,l)=>l.bindPopup(`<b>${f.properties.classe}</b>${f.properties.area_ha?'<br>'+Number(f.properties.area_ha).toLocaleString('pt-BR')+' ha no MS':''}`)});
+        document.getElementById(id+'-leg').innerHTML=d.features.map(f=>`<div><i style="background:${cor(f.properties.classe)}"></i>${f.properties.classe}${f.properties.area_ha?' · '+(f.properties.area_ha/1e6).toLocaleString('pt-BR',{maximumFractionDigits:2})+' mi ha':''}</div>`).join('');
+      }
+      if(e.target.checked)cam.addTo(mapa);
+    };
   }
 });
 

@@ -144,14 +144,18 @@ for f in shps("solos")[:1]:
     log.append(f"solos: fonte {f.name}")
 
 # ------------------------------------------------------------ uso do solo
+CODIGOS_USO = {"SOJ": "Soja", "CAN": "Cana-de-açúcar", "MIL": "Milho", "PST": "Pastagem", "REM": "Remanescente/vegetação",
+               "EUC": "Eucalipto", "PIN": "Pinus", "SER": "Seringueira", "OUT": "Outros usos"}
 for f in shps("uso_solo"):
     g = ler(f)
     g = gpd.clip(g[g.intersects(area_ms)], area_ms)
-    c = coluna(g, "CLASSE", "CLASS", "USO", "CULTURA", "DESCRICAO", "NOME")
-    if c is None:
-        c = next((x for x in g.columns if x != "geometry" and g[x].dtype == object), None)
-    g = g.assign(classe=g[c].astype(str) if c else f.stem)[["classe", "geometry"]]
-    g = g.dissolve("classe", as_index=False)
+    c = coluna(g, "UCS", "CLASSE", "CLASS", "USO", "CULTURA", "DESCRICAO")
+    classe = g[c].astype(str).str.strip().str.upper().map(lambda v: CODIGOS_USO.get(v, v.title())) if c else f.stem
+    g = g.assign(classe=classe)[["classe", "geometry"]]
+    # área em ha (projeção equivalente) antes de simplificar
+    g["area_ha"] = g.to_crs("ESRI:102033").area / 1e4
+    g = g.dissolve("classe", as_index=False, aggfunc={"area_ha": "sum"})
+    g["area_ha"] = g["area_ha"].round(0)
     salvar(g, f"uso_{f.stem.lower()}", TOL_USO)
 
 # --------------------------------------------------------------- manifesto
