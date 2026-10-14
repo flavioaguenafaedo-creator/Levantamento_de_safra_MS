@@ -52,6 +52,7 @@ input[type=search]{width:100%;padding:8px 10px;border:1px solid var(--linha);bor
 .sem{display:flex;align-items:center;gap:8px;margin:2px 0 8px}.sem input{flex:1;accent-color:var(--acento)}
 .sem span{font:500 12px "IBM Plex Mono",monospace;white-space:nowrap}
 .resumo{font-size:12.5px;margin:4px 0 6px;color:var(--suave)}.resumo b{color:var(--tinta);font-size:15px}
+.graf text{font:10px 'IBM Plex Sans';fill:var(--suave)}.graf .ax{stroke:var(--linha)}
 .barra{height:8px;border-radius:4px;background:var(--linha);overflow:hidden;display:flex;margin:6px 0 2px}.barra i{display:block;height:100%}
 #menu{display:none}
 @media (max-width:760px){
@@ -89,6 +90,7 @@ input[type=search]{width:100%;padding:8px 10px;border:1px solid var(--linha);bor
     <input type="search" id="busca" list="lista-mun" placeholder="Buscar município…">
     <datalist id="lista-mun"></datalist>
     <div id="ficha-pl" class="ficha" style="margin-top:10px" hidden></div>
+    <div id="ficha-cl" class="ficha" style="margin-top:10px" hidden></div>
     <div id="ficha" class="ficha" style="margin-top:10px"><span class="vazio">Clique em um município no mapa para ver os solos que ocorrem nele.</span></div>
   </div>
 
@@ -99,11 +101,24 @@ input[type=search]{width:100%;padding:8px 10px;border:1px solid var(--linha);bor
     <label class="cam"><input type="checkbox" id="c-solo" checked> Solos</label>
     <div class="seg" id="modo-solo"><button data-m="ordem" class="on">Classe</button><button data-m="textura">Textura</button></div>
     <div class="leg" id="leg-solo"></div>
+    <label class="cam"><input type="checkbox" id="c-clima"> Clima por município</label>
+    <div id="ctl-clima" hidden style="margin-left:24px">
+      <select id="cl-per" class="campo" style="margin-top:4px">
+        <option value="f7">Próximos 7 dias (previsão)</option><option value="f15">Próximos 15 dias (previsão)</option>
+        <option value="p7">Últimos 7 dias (estimativa)</option><option value="p30">Últimos 30 dias (estimativa)</option></select>
+      <select id="cl-var" class="campo" style="margin-top:4px">
+        <option value="p">Chuva acumulada (mm)</option><option value="bh">Chuva − evapotranspiração (mm)</option>
+        <option value="tx">Temperatura máxima (°C)</option><option value="tn">Temperatura mínima (°C)</option>
+        <option value="amp">Amplitude térmica média (°C)</option><option value="v">Vento máximo (km/h)</option>
+        <option value="seco">Dias seguidos sem chuva (até hoje)</option></select>
+      <div class="leg" id="leg-clima" style="margin-left:0"></div>
+      <div class="vazio" id="info-clima" style="font-size:11.5px"></div>
+    </div>
+    <label class="cam"><input type="checkbox" id="c-est"> Estações INMET</label>
+    <div class="vazio" id="info-est" style="margin-left:24px;font-size:11.5px"></div>
     <div id="usos"></div>
     <div class="prox">Uso do solo · aguardando shapefile</div>
-    <div class="prox">Clima interpolado · etapa 4</div>
     <div class="prox">Fotos e relatos de campo · etapa 3</div>
-    <div class="prox">Previsão do tempo · etapa 4</div>
   </div>
 
   <div class="sec">
@@ -173,6 +188,7 @@ function destacar(lyr){
   selecionado=lyr;lyr.setStyle({weight:2.6,color:getComputedStyle(document.documentElement).getPropertyValue('--acento2')});lyr.bringToFront();
   fichaMunicipio(lyr.feature);
   fichaPlantio();
+  fichaClima();
 }
 
 Promise.all([pegar('dados/manifesto.json'),pegar('dados/municipios.geojson'),pegar('dados/solos.geojson'),pegar('dados/limite_ms.geojson')])
@@ -379,6 +395,92 @@ document.getElementById('sl-sem').oninput=e=>{semSel=+e.target.value;atualizarPl
 document.querySelectorAll('#modo-pl button').forEach(b=>b.onclick=()=>{document.querySelectorAll('#modo-pl button').forEach(x=>x.classList.toggle('on',x===b));vis=b.dataset.v;atualizarPl()});
 // pasta já usada antes: oferece reconectar com um clique
 lerGuardada().then(h=>{if(h){document.getElementById('bt-pasta').textContent='Reconectar “'+h.name+'”'}});
+
+// =====================================================================
+// Clima: modelo por município (Open-Meteo) e estações INMET
+// =====================================================================
+let CL=null, EST=null, camCl=null, camEst=null;
+mapa.createPane('clima').style.zIndex=390;
+const iHoje=()=>CL?CL.datas.indexOf(CL.hoje):-1;
+function janela(per){const h=iHoje();if(h<0)return[0,0];return{f7:[h,h+7],f15:[h,Math.min(CL.datas.length,h+15)],p7:[h-7,h],p30:[h-30,h]}[per]}
+function calcClima(m,per,v){
+  const[a,b]=janela(per),sl=k=>(m[k]||[]).slice(a,b).filter(x=>x!=null);
+  if(v==='p')return sl('p').reduce((t,x)=>t+x,0);
+  if(v==='bh'){const p=sl('p').reduce((t,x)=>t+x,0),e=sl('et0').reduce((t,x)=>t+x,0);return p-e}
+  if(v==='tx'){const x=sl('tx');return x.length?Math.max(...x):null}
+  if(v==='tn'){const x=sl('tn');return x.length?Math.min(...x):null}
+  if(v==='v'){const x=sl('v');return x.length?Math.max(...x):null}
+  if(v==='amp'){const x=sl('tx'),n=sl('tn');return x.length?x.reduce((t,q,i)=>t+q-(n[i]??q),0)/x.length:null}
+  if(v==='seco'){let n=0;for(let i=iHoje()-1;i>=0;i--){if((m.p[i]??0)>=1)break;n++}return n}
+}
+const ESC={p:{c:['#f7fbff','#c6dbef','#6baed6','#2171b5','#08306b'],min:0,max:{f7:80,f15:150,p7:80,p30:200},u:'mm'},
+  bh:{c:['#8c510a','#d8b365','#f5f5f5','#5ab4ac','#01665e'],min:-60,max:60,u:'mm'},
+  tx:{c:['#fff5d6','#fdd28a','#f59a4a','#d9472b','#8f1d1d'],min:28,max:40,u:'°C'},
+  tn:{c:['#3b4cc0','#7b9ff9','#c0d4f5','#f2f2f2','#f4c6a6'],min:0,max:20,u:'°C'},
+  amp:{c:['#f2f0f7','#cbc9e2','#9e9ac8','#6a51a3','#3f007d'],min:6,max:18,u:'°C'},
+  v:{c:['#f7fcf5','#c7e9c0','#74c476','#238b45','#00441b'],min:10,max:50,u:'km/h'},
+  seco:{c:['#ffffe5','#fee391','#fe9929','#cc4c02','#662506'],min:0,max:30,u:'dias'}};
+function corEsc(v,e,per){if(v==null)return null;const mx=typeof e.max==='object'?e.max[per]:e.max;return corSeq(100*(v-e.min)/(mx-e.min),e.c)}
+async function atualizarClima(){
+  const on=document.getElementById('c-clima').checked;document.getElementById('ctl-clima').hidden=!on;
+  if(camCl){mapa.removeLayer(camCl);camCl=null}if(!on)return;
+  CL=CL||await pegar('dados/clima/modelo_municipios.json');
+  const info=document.getElementById('info-clima');
+  if(!CL){info.textContent='Dados de clima ainda não gerados. Aguarde a rotina diária.';return}
+  const per=document.getElementById('cl-per').value,v=document.getElementById('cl-var').value,e=ESC[v];
+  const sel=document.getElementById('cl-per');sel.disabled=v==='seco';
+  camCl=L.geoJSON(dadosMun,{pane:'clima',interactive:false,style:f=>{const m=CL.mun[String(+f.properties.CD_MUN)];const k=m?corEsc(calcClima(m,per,v),e,per):null;
+    return k?{fillColor:k,fillOpacity:.8,weight:0}:{fill:false,stroke:false}}}).addTo(mapa);
+  const mx=typeof e.max==='object'?e.max[per]:e.max;
+  document.getElementById('leg-clima').innerHTML=[0,25,50,75,100].map(t=>`<div><i style="background:${corSeq(t,e.c)}"></i>${t===100?'≥ ':t===0&&v!=='seco'&&v!=='p'?'≤ ':''}${Math.round(e.min+(mx-e.min)*t/100)} ${e.u}</div>`).join('')
+    +(v==='tn'?'<div class="vazio">Atenção a valores ≤ 3 °C: risco de geada</div>':'');
+  const[a,b]=janela(per);
+  info.innerHTML=`${v==='seco'?'Até '+fmtD(new Date(CL.hoje+'T12:00')):fmtD(new Date(CL.datas[a]+'T12:00'))+' a '+fmtD(new Date(CL.datas[b-1]+'T12:00'))} · ${CL.fonte.split(' (')[0]} · gerado ${new Date(CL.gerado).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'})}${per.startsWith('p')||v==='seco'?'<br>Dias passados: estimativa de modelo, não medição. Compare com as estações INMET.':''}`;
+}
+async function atualizarEst(){
+  const on=document.getElementById('c-est').checked;if(camEst){mapa.removeLayer(camEst);camEst=null}
+  const info=document.getElementById('info-est');info.textContent='';if(!on)return;
+  EST=EST||await pegar('dados/clima/estacoes_inmet.json');
+  if(!EST){info.textContent='Dados das estações ainda não gerados.';return}
+  camEst=L.layerGroup(EST.estacoes.filter(e=>e.lat&&e.lon).map(e=>{
+    const ds=Object.keys(e.serie),ult=ds.slice(-30),s7=ds.slice(-7);
+    const soma=l=>l.reduce((t,d)=>t+(e.serie[d].p??0),0).toFixed(0);
+    return L.circleMarker([e.lat,e.lon],{radius:6,color:'#fff',weight:1.5,fillColor:'#1f4e79',fillOpacity:1,pane:'limites'})
+      .bindPopup(`<b>${e.nome}</b> · ${e.codigo}<br>Último dia com dados: ${e.ultimo_dia?fmtD(new Date(e.ultimo_dia+'T12:00')):'—'}<br>
+      Chuva nos 7 últimos dias com dados: <b>${soma(s7)} mm</b><br>Chuva nos 30 últimos dias com dados: <b>${soma(ult)} mm</b><br>
+      ${graficoEst(e)}`,{maxWidth:320})})).addTo(mapa);
+  const ult=EST.estacoes.map(e=>e.ultimo_dia).filter(Boolean).sort().at(-1);
+  info.innerHTML=`${EST.estacoes.length} estações · dados até ${ult?fmtD(new Date(ult+'T12:00')):'—'}<br>O INMET publica o arquivo anual com algumas semanas de atraso.`;
+}
+function graficoEst(e){const ds=Object.keys(e.serie).slice(-30);if(!ds.length)return'';const W=280,H=80,bw=W/ds.length;
+  const pm=Math.max(10,...ds.map(d=>e.serie[d].p||0));
+  return `<svg class="graf" viewBox="0 0 ${W} ${H+14}" width="100%" font-family="IBM Plex Sans, sans-serif" font-size="10">${ds.map((d,i)=>{const p=e.serie[d].p||0,h=H*p/pm;return `<rect x="${i*bw+1}" y="${H-h}" width="${bw-2}" height="${h}" fill="#2171b5"><title>${d}: ${p} mm</title></rect>`}).join('')}
+  <line class="ax" x1="0" x2="${W}" y1="${H}" y2="${H}"/><text x="0" y="${H+12}">${fmtD(new Date(ds[0]+'T12:00'))}</text><text x="${W}" y="${H+12}" text-anchor="end">${fmtD(new Date(ds.at(-1)+'T12:00'))}</text></svg>`}
+
+// gráfico na ficha do município: 30 dias passados + 15 de previsão
+async function fichaClima(){
+  const box=document.getElementById('ficha-cl');if(!selecionado){box.hidden=true;return}
+  CL=CL||await pegar('dados/clima/modelo_municipios.json');if(!CL){box.hidden=true;return}
+  const m=CL.mun[String(+selecionado.feature.properties.CD_MUN)];if(!m){box.hidden=true;return}
+  const h=iHoje(),a=Math.max(0,h-30),b=Math.min(CL.datas.length,h+15),idx=[...Array(b-a).keys()].map(i=>i+a);
+  const W=284,H=90,bw=W/idx.length,pm=Math.max(20,...idx.map(i=>m.p[i]||0)),tmin=Math.min(...idx.map(i=>m.tn[i]??99))-2,tmax=Math.max(...idx.map(i=>m.tx[i]??0))+2;
+  const y=t=>H-(t-tmin)/(tmax-tmin)*H,lin=k=>idx.map((i,j)=>m[k][i]==null?'':`${j?'L':'M'}${(j+.5)*bw},${y(m[k][i])}`).join('');
+  const xh=(h-a)*bw, s=(i0,i1,k)=>m[k].slice(i0,i1).reduce((t,x)=>t+(x||0),0);
+  box.hidden=false;
+  box.innerHTML=`<b>Clima · ${selecionado.feature.properties.NM_MUN}</b>
+   <div class="vazio">Últimos 30 dias: ${s(a,h,'p').toFixed(0)} mm (estimativa) · Próximos 15: ${s(h,b,'p').toFixed(0)} mm (previsão)</div>
+   <svg class="graf" viewBox="0 0 ${W} ${H+28}" width="100%" font-family="IBM Plex Sans, sans-serif" font-size="10" style="margin-top:6px;overflow:visible">
+    <rect x="${xh}" y="0" width="${W-xh}" height="${H}" fill="var(--linha)" opacity=".45"/>
+    ${idx.map((i,j)=>{const p=m.p[i]||0,hh=H*.6*p/pm;return `<rect x="${j*bw+.5}" y="${H-hh}" width="${Math.max(1,bw-1)}" height="${hh}" fill="#2171b5"><title>${CL.datas[i]}: ${p} mm · ${m.tn[i]}–${m.tx[i]} °C</title></rect>`}).join('')}
+    <path d="${lin('tx')}" fill="none" stroke="#d9472b" stroke-width="1.5"/><path d="${lin('tn')}" fill="none" stroke="#3b6fb6" stroke-width="1.5"/>
+    <line class="ax" x1="0" x2="${W}" y1="${H}" y2="${H}"/>
+    <text x="0" y="${H+12}">${fmtD(new Date(CL.datas[a]+'T12:00'))}</text><text x="${xh}" y="${H+12}" text-anchor="middle">hoje</text>
+    <text x="${W}" y="${H+12}" text-anchor="end">${fmtD(new Date(CL.datas[b-1]+'T12:00'))}</text>
+    <text x="0" y="${H+25}" fill="#2171b5">■ chuva (máx ${pm.toFixed(0)} mm)</text><text x="${W}" y="${H+25}" text-anchor="end"><tspan fill="#d9472b">— máx</tspan> <tspan fill="#3b6fb6">— mín</tspan> ${tmin.toFixed(0)}–${tmax.toFixed(0)} °C</text>
+   </svg>${idx.some(i=>i>=h&&m.tn[i]!=null&&m.tn[i]<=3)?'<div style="color:#c4472b;font-weight:600;font-size:12.5px">⚠ Previsão de mínima ≤ 3 °C: risco de geada</div>':''}`;
+}
+['c-clima','cl-per','cl-var'].forEach(id=>document.getElementById(id).onchange=atualizarClima);
+document.getElementById('c-est').onchange=atualizarEst;
 </script>
 </body>
 </html>
