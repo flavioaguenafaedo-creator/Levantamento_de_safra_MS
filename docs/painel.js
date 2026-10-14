@@ -182,6 +182,25 @@ defCam('solo', {grupo: 'solo', nome: 'Solos (IBGE/Embrapa 1:5.000.000)', op: .7,
       <div class="nota">Escala regional: não representa variações dentro do município nem no talhão.</div>`;
   },
   depois: () => document.querySelectorAll('#modo-solo button').forEach(b => b.onclick = () => { modoSolo = b.dataset.m; CAM.solo.layer && CAM.solo.layer.setStyle(CAM.solo.estilo); atualizarSub('solo'); })});
+// solos ocupados por cada cultura mapeada (gerado pela rotina: dados/solo_cultura.json)
+let SOLO_CULT = null;
+const cadDe = tex => Object.entries(tex).reduce((t, [k, p]) => t + (CAD_TEX[k] ?? 60) * p / 100, 0) || 60;
+function soloCultura(cid, cd) {
+  if (!SOLO_CULT || !cid) return null;
+  const base = cid.replace(/\d$/, ''), nome = Object.keys(SOLO_CULT.culturas).find(n => { const c = culturaDe(n); return c && c.id.replace(/\d$/, '') === base; });
+  if (!nome) return null;
+  const r = cd ? SOLO_CULT.culturas[nome].mun[cd] : SOLO_CULT.culturas[nome].estado; if (!r || !r.area) return null;
+  const pct = o => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, 100 * v / r.area]));
+  const textura = pct(r.textura);
+  return {nome, area: r.area, ordem: pct(r.ordem), textura, cad: cadDe(textura)};
+}
+function htmlSoloCultura(cd) {
+  if (!SOLO_CULT) return '';
+  const tb = (o, cores) => Object.entries(o).filter(([, v]) => v >= .5).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td><i style="background:${cores[k] || '#bdbdbd'}"></i>${esc(k)}</td><td>${v.toFixed(0)}%</td></tr>`).join('');
+  const blocos = Object.keys(SOLO_CULT.culturas).map(n => { const c = culturaDe(n); const r = soloCultura(c?.id, cd); if (!r) return '';
+    return `<div class="nota" style="margin-top:8px;color:var(--tinta)"><b>${esc(n)}</b> · ${n0(r.area)} ha mapeados</div><table>${tb(r.textura, CORES_TEX)}</table><table style="margin-top:4px">${tb(r.ordem, CORES_ORDEM)}</table>`; }).join('');
+  return blocos ? `<h3>Solos ocupados pelas culturas mapeadas</h3>${blocos}<div class="nota">Cruzamento dos mapas de uso do solo com o mapa de solos 1:5.000.000 (% da área de cada cultura).</div>` : '';
+}
 function soloDoMunicipio(f) {
   const cd = String(+f.properties.CD_MUN); if (SOLO_MUN[cd]) return SOLO_MUN[cd];
   if (!dadosSolo) return null;
@@ -440,7 +459,7 @@ defCam('est', {grupo: 'clima', nome: 'Estações INMET',
 // =====================================================================
 // FOTOS DE CAMPO (cultura pela subpasta; posição pelo GPS ou pelo carimbo)
 // =====================================================================
-const CACHE_FOTOS = 'painel-safra.fotos.v1';
+const CACHE_FOTOS = 'painel-safra.fotos.v3';
 let fotoFiltro = null;      // Set de ids de cultura visíveis (null = todas)
 const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 let _ocr = null;
@@ -451,29 +470,89 @@ function ocrWorker() {
     await w.setParameters({tessedit_pageseg_mode: '6'}); return w; })();
   _ocr.catch(() => { _ocr = null; }); return _ocr;
 }
+// Carimbo de data/coordenadas escrito na imagem por apps de câmera (texto vermelho, amarelo ou branco),
+// geralmente no rodapé ou no topo. Tenta várias cores e faixas e para na primeira leitura com coordenadas.
+// "contorno": exige pixel escuro por perto (o texto branco desses apps tem contorno preto; separa de nuvens e capulhos).
+const MASCARAS = {
+  vermelho: {f: (r, g, b) => r > 150 && g < 110 && b < 110 && r - Math.max(g, b) > 70, contorno: false},
+  amarelo: {f: (r, g, b) => r > 200 && g > 200 && b < 90 && Math.abs(r - g) < 35, contorno: false},
+  branco: {f: (r, g, b) => Math.min(r, g, b) > 205 && Math.max(r, g, b) - Math.min(r, g, b) < 35, contorno: true}
+};
+function perto(escuro, w, h, raio) {   // dilatação (máximo móvel) separável
+  const t = new Uint8Array(w * h), o = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) { let n = 0; const b = y * w;
+    for (let x = -raio; x < w; x++) { if (x + raio < w && escuro[b + x + raio]) n++; if (x - raio - 1 >= 0 && escuro[b + x - raio - 1]) n--; if (x >= 0) t[b + x] = n > 0; } }
+  for (let x = 0; x < w; x++) { let n = 0;
+    for (let y = -raio; y < h; y++) { if (y + raio < h && t[(y + raio) * w + x]) n++; if (y - raio - 1 >= 0 && t[(y - raio - 1) * w + x]) n--; if (y >= 0) o[y * w + x] = n > 0; } }
+  return o;
+}
 async function lerCarimbo(file) {
-  const bmp = await createImageBitmap(file), W = bmp.width, H = bmp.height, faixa = Math.round(H * .16), sc = Math.min(3, Math.max(.4, 1600 / W));
-  const tentar = async y0 => {
-    const c = document.createElement('canvas'); c.width = Math.round(W * sc); c.height = Math.round(faixa * sc);
-    const g = c.getContext('2d'); g.drawImage(bmp, 0, y0, W, faixa, 0, 0, c.width, c.height);
-    const d = g.getImageData(0, 0, c.width, c.height), px = d.data; let n = 0;
-    for (let k = 0; k < px.length; k += 4) { const r = px[k], gg = px[k + 1], b = px[k + 2]; const red = r > 150 && gg < 110 && b < 110 && r - Math.max(gg, b) > 70; if (red) n++; px[k] = px[k + 1] = px[k + 2] = red ? 0 : 255; }
-    if (n < 400) return null;
+  const bmp = await createImageBitmap(file), W = bmp.width, H = bmp.height, faixa = Math.round(H * .18);
+  const tentar = async (y0, x0, cor) => {
+    const w0 = W - x0, sc = Math.min(3, Math.max(1, 1600 / w0)), c = document.createElement('canvas'); c.width = Math.round(w0 * sc); c.height = Math.round(faixa * sc);
+    const g = c.getContext('2d'); g.drawImage(bmp, x0, y0, w0, faixa, 0, 0, c.width, c.height);
+    const d = g.getImageData(0, 0, c.width, c.height), px = d.data, M = MASCARAS[cor], np = c.width * c.height;
+    const hit = new Uint8Array(np); let n = 0;
+    for (let k = 0, q = 0; q < np; k += 4, q++) if (M.f(px[k], px[k + 1], px[k + 2])) { hit[q] = 1; n++; }
+    if (n < 400 || n / np > .45) return null;          // sem texto dessa cor, ou fundo inteiro dessa cor
+    if (M.contorno) {
+      const esc_ = new Uint8Array(np); for (let k = 0, q = 0; q < np; k += 4, q++) esc_[q] = (.299 * px[k] + .587 * px[k + 1] + .114 * px[k + 2]) < 80;
+      const viz = perto(esc_, c.width, c.height, Math.round(3 * sc)); n = 0; for (let q = 0; q < np; q++) { hit[q] = hit[q] && viz[q]; n += hit[q]; }
+      if (n < 300) return null;
+    }
+    for (let k = 0, q = 0; q < np; k += 4, q++) px[k] = px[k + 1] = px[k + 2] = hit[q] ? 0 : 255;
     g.putImageData(d, 0, 0);
-    const w = await ocrWorker(); return interpretarCarimbo((await w.recognize(c)).data.text);
+    const w = await ocrWorker(), t1 = (await w.recognize(c)).data.text; let r = interpretarCarimbo(t1);
+    if (!r || r.lat == null) {                       // 2ª leitura só com dígitos e sinais de coordenada
+      await w.setParameters({tessedit_char_whitelist: '0123456789,.-SWNOE '});
+      try { const r2 = interpretarCarimbo((await w.recognize(c)).data.text); if (r2 && r2.lat != null) r = {...(r || {}), lat: r2.lat, lon: r2.lon}; }
+      finally { await w.setParameters({tessedit_char_whitelist: ''}); }
+    }
+    return r;
   };
-  const r = (await tentar(0)) || (await tentar(H - faixa)); bmp.close && bmp.close(); return r;
+  let melhor = null;
+  // rodapé primeiro (mais comum), depois topo; cores em ordem; lado direito antes da largura toda
+  outer: for (const y0 of [H - faixa, 0]) for (const cor of ['vermelho', 'amarelo', 'branco']) for (const x0 of [Math.round(W * .35), 0]) {
+    const r = await tentar(y0, x0, cor);
+    if (r && r.lat != null) { melhor = {...(melhor || {}), ...r}; break outer; }
+    if (r && r.data && !melhor) melhor = r;
+  }
+  bmp.close && bmp.close(); return melhor;
+}
+// faixa geográfica de MS com folga (graus): usada para validar e reparar leituras do carimbo
+const LIM = {lat: [-24.3, -17.0], lon: [-58.4, -50.7]};
+const dentro = (v, [a, b]) => v >= a && v <= b;
+function numeroGeo(tok, lim, hemNeg) {
+  // aceita "-18,0778", "18.0778" e também leituras sem separador ("1807785"): recoloca a vírgula pela faixa de MS
+  const t = String(tok).replace(/[^\d.,-]/g, ''); if (!t) return null;
+  let v = parseFloat(t.replace(',', '.')); if (/[.,]/.test(t) && isFinite(v)) { v = -Math.abs(v); return dentro(v, lim) ? v : null; }
+  const dig = t.replace(/\D/g, '');
+  for (let ini = 0; ini <= 2 && ini < dig.length - 3; ini++) for (const ni of [2, 1]) {
+    const inteiro = dig.slice(ini, ini + ni), dec = dig.slice(ini + ni, ini + ni + 4); if (dec.length < 3) continue;
+    const cand = -parseFloat(inteiro + '.' + dec); if (dentro(cand, lim)) return cand;
+  }
+  return null;
 }
 function interpretarCarimbo(txt) {
-  const t = String(txt || '').replace(/[Oo](?=\d)/g, '0').replace(/[‐‑–—]/g, '-'), out = {};
+  const t = String(txt || '').replace(/[Oo](?=\d)/g, '0').replace(/[‐‑–—~]/g, '-'), out = {};
+  // 1) formato normal: lat [S] [,;] lon [W]
   const m = t.match(/(-?\d{1,2}[.,]\d{2,7})\s*°?\s*([NS])?\s*[,;]?\s+(-?\d{1,3}[.,]\d{2,7})\s*°?\s*([EWLO])?/i)
     || t.match(/(-?\d{1,2}[.,]\d{2,7})\s*°?\s*([NS])?\s*[,;]\s*(-?\d{1,3}[.,]\d{2,7})\s*°?\s*([EWLO])?/i);
   if (m) { let lat = parseFloat(m[1].replace(',', '.')), lon = parseFloat(m[3].replace(',', '.'));
     if (/s/i.test(m[2] || '')) lat = -Math.abs(lat); if (/[wo]/i.test(m[4] || '')) lon = -Math.abs(lon);
     if (Math.abs(lat) <= 90 && Math.abs(lon) <= 180 && (lat || lon)) { out.lat = lat; out.lon = lon; } }
-  let d = t.match(/(\d{1,2})\s+de\s+([a-zçA-ZÇ]+)\.?\s+de\s+(\d{4})/);
-  if (d) { const i = MESES.indexOf(norm(d[2]).slice(0, 3)); if (i >= 0) out.data = new Date(+d[3], i, +d[1], 12); }
-  else if ((d = t.match(/(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})(?:\D+(\d{1,2}):(\d{2}))?/))) out.data = new Date(+d[3], d[2] - 1, +d[1], d[4] ? +d[4] : 12, d[5] ? +d[5] : 0);
+  // 2) reparo: longitude legível seguida de W/O e latitude logo antes, mesmo sem separador
+  if (out.lat == null || !dentro(out.lat, LIM.lat) || !dentro(out.lon, LIM.lon)) {
+    const r = t.match(/([-\d.,]{5,12})\s*[S5]?\s*[,;]?\s*(-?\d{2}[.,]?\d{3,6})\s*[WO]/i);
+    if (r) { const la = numeroGeo(r[1], LIM.lat), lo = numeroGeo(r[2], LIM.lon); if (la != null && lo != null) { out.lat = la; out.lon = lo; out.reparado = true; } }
+  }
+  // datas: escolhe a mais frequente no carimbo (as linhas costumam repetir a data)
+  const cand = [];
+  for (const d of t.matchAll(/(\d{1,2})\s+de\s+([a-zçA-ZÇ]+)\.?,?\s+de\s+(\d{4})/g)) { const i = MESES.indexOf(norm(d[2]).slice(0, 3)); if (i >= 0) cand.push(new Date(+d[3], i, +d[1], 12)); }
+  for (const d of t.matchAll(/(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})(?:\D+(\d{1,2}):(\d{2}))?/g)) cand.push(new Date(+d[3], d[2] - 1, +d[1], d[4] ? +d[4] : 12, d[5] ? +d[5] : 0));
+  const ok = cand.filter(d => !isNaN(d) && d <= addD(HOJE, 1) && d.getFullYear() >= 2015);
+  if (ok.length) { const cont = {}; ok.forEach(d => { const k = dISO(d); cont[k] = (cont[k] || 0) + 1; });
+    const k = Object.entries(cont).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? 1 : -1))[0][0]; out.data = ok.find(d => dISO(d) === k); }
   return out.lat != null || out.data ? out : null;
 }
 function munDoPonto(lon, lat) { return dadosMun?.features.find(m => turf.booleanPointInPolygon([lon, lat], m)) || null; }
@@ -646,9 +725,11 @@ lerGuardada().then(h => { if (h) $('bt-pasta').textContent = 'Reconectar “' + 
 // MUNICÍPIO: ficha e análise agronômica
 // =====================================================================
 let abaFicha = 'geral';
+const ESTADO = {estado: true};
 function selecionar(f) {
   selecionado = f;
   if (camDestaque) mapa.removeLayer(camDestaque);
+  if (f === ESTADO) { camDestaque = null; abrirFicha(f); return; }
   camDestaque = L.geoJSON(f, {pane: 'destaque', interactive: false, style: {fill: false, color: getComputedStyle(document.documentElement).getPropertyValue('--acento2').trim() || '#b5882c', weight: 3}}).addTo(mapa);
   abrirFicha(f);
 }
@@ -656,7 +737,15 @@ $('f-fechar').onclick = () => { $('ficha').hidden = true; selecionado = null; if
 document.querySelectorAll('.abas button').forEach(b => b.onclick = () => { abaFicha = b.dataset.a; document.querySelectorAll('.abas button').forEach(x => x.classList.toggle('on', x === b)); $('f-geral').hidden = abaFicha !== 'geral'; $('f-analise').hidden = abaFicha !== 'analise'; abrirFicha(selecionado, true); });
 async function abrirFicha(f, manter) {
   if (!f) return;
-  const p = f.properties; $('ficha').hidden = false;
+  $('ficha').hidden = false;
+  if (f === ESTADO) {
+    $('f-nome').textContent = 'Mato Grosso do Sul'; $('f-sub').textContent = `Visão estadual · ${dadosMun.features.length} municípios`;
+    await garantirClima();
+    if (abaFicha === 'geral') $('f-geral').innerHTML = htmlGeralEstado();
+    else { $('f-analise').innerHTML = '<div class="nota">Calculando a análise de todos os municípios…</div>'; setTimeout(() => { $('f-analise').innerHTML = `<div class="analise">${gerarAnaliseEstado()}</div>`; ligarCopiar(); }, 30); }
+    return;
+  }
+  const p = f.properties;
   $('f-nome').textContent = p.NM_MUN; $('f-sub').textContent = `IBGE ${p.CD_MUN} · ${p.NM_RGI || ''}${p.AREA_KM2 ? ' · ' + Number(p.AREA_KM2).toLocaleString('pt-BR') + ' km²' : ''}`;
   await garantirClima();
   if (abaFicha === 'geral') $('f-geral').innerHTML = htmlGeral(f);
@@ -696,6 +785,7 @@ function htmlGeral(f) {
   const so = soloDoMunicipio(f);
   if (so) { const tb = (o, cores) => Object.entries(o).filter(([, v]) => v >= .5).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td><i style="background:${cores[k] || '#bdbdbd'}"></i>${esc(k)}</td><td>${v.toFixed(0)}%</td></tr>`).join('');
     h += `<h3>Solos (escala 1:5.000.000)</h3><table>${tb(so.ordem, CORES_ORDEM)}</table><table style="margin-top:6px">${tb(so.textura, CORES_TEX)}</table><div class="nota">Água disponível estimada: ~${so.cad.toFixed(0)} mm em 60 cm (pela textura).</div>`; }
+  h += htmlSoloCultura(cd);
   const fts = FOTOS.filter(p => p.mun && String(+p.mun.properties.CD_MUN) === cd), rel = RELATOS.filter(r => r.muns.has(cd));
   if (fts.length || rel.length) h += `<h3>Campo</h3><div class="nota">${fts.length} foto${fts.length === 1 ? '' : 's'}${fts.length ? ' (última em ' + fmtD(new Date(Math.max(...fts.map(p => p.data)))) + ')' : ''} · ${rel.length} relato${rel.length === 1 ? ' cita' : 's citam'} o município${rel.length ? ' (último: ' + esc(rel[0].nome) + ', ' + fmtD(rel[0].data) + ')' : ''}</div>`;
   return h;
@@ -736,8 +826,9 @@ function estacaoProxima(lat, lon) {
   for (const e of EST.estacoes) { if (!e.lat) continue; const d = turf.distance([lon, lat], [e.lon, e.lat]); if (d < 70 && (!melhor || d < melhor.d)) melhor = {e, d}; }
   return melhor;
 }
-function gerarAnalise(f) {
-  const p = f.properties, cd = String(+p.CD_MUN), c = cultAtual(), m = c?.mun[cd], mc = CL?.mun[cd], so = soloDoMunicipio(f);
+function gerarAnalise(f, soDados = false) {
+  const p = f.properties, cd = String(+p.CD_MUN), c = cultAtual(), m = c?.mun[cd], mc = CL?.mun[cd], so = soloDoMunicipio(f), sc = soloCultura(c?.cid, cd), cad = sc?.cad || so?.cad || 60;
+  let bhR = null;
   const nome = esc(p.NM_MUN), out = [], atencao = []; let pontos = 0;
   const cult = c ? esc(c.nome.toLowerCase()) : null, cid = c?.cid;
   out.push(`<div class="aviso">Análise automática gerada a partir dos dados do painel em ${fmtDL(HOJE)}. É um apoio à decisão: indica situações a verificar e não substitui a observação de campo. Associações entre clima, solo e lavoura não implicam, por si, relação de causa.</div>`);
@@ -764,6 +855,8 @@ function gerarAnalise(f) {
     const tex = Object.entries(so.textura).sort((a, b) => b[1] - a[1])[0], ord = Object.entries(so.ordem).sort((a, b) => b[1] - a[1])[0];
     let t = `Predominam ${esc(ord[0].toLowerCase())}s (${ord[1].toFixed(0)}% da área) com textura ${esc(tex[0].toLowerCase())} (${tex[1].toFixed(0)}%), o que corresponde a uma água disponível estimada de ~${so.cad.toFixed(0)} mm na camada de 60 cm.`;
     if (so.cad < 55) t += ' Solos de menor retenção de água tornam a lavoura mais sensível a veranicos curtos.'; else if (so.cad > 80) t += ' Solos de maior retenção amortecem veranicos curtos, mas podem dificultar operações após chuvas intensas.';
+    if (sc) { const tc = Object.entries(sc.textura).sort((a, b) => b[1] - a[1]), oc = Object.entries(sc.ordem).sort((a, b) => b[1] - a[1])[0];
+      t += ` Considerando só as áreas de ${esc(sc.nome.toLowerCase())} do mapa de uso (${n0(sc.area)} ha), ${tc.slice(0, 2).map(([k, v]) => `${v.toFixed(0)}% estão em solos de textura ${esc(k.toLowerCase())}`).join(' e ')}, e ${oc[1].toFixed(0)}% em ${esc(oc[0].toLowerCase())}s; a água disponível nessas áreas é estimada em ~${sc.cad.toFixed(0)} mm, valor usado no balanço hídrico.`; }
     out.push(`<h4>Solo</h4><p>${t} <span class="nota">(Mapa 1:5.000.000: valor regional, não do talhão.)</span></p>`);
   }
   // 3. clima e balanço hídrico
@@ -772,11 +865,11 @@ function gerarAnalise(f) {
     const p30 = soma('p', h - 30, h), p15 = soma('p', h, h + 15), et30 = soma('et0', h - 30, h), et15 = soma('et0', h, h + 15), seco = diasSecos(mc);
     const tx15 = mc.tx.slice(h, h + 15), tn15 = mc.tn.slice(h, h + 15), quente = tx15.filter(t => t >= 35).length, geada = tn15.filter(t => t != null && t <= 3).length;
     let t = `Nos últimos 30 dias, o modelo estima <b>${p30.toFixed(0)} mm</b> de chuva para uma evapotranspiração de referência de ${et30.toFixed(0)} mm${seco >= 1 ? `, com ${seco} dia${seco > 1 ? 's' : ''} seguido${seco > 1 ? 's' : ''} sem chuva até hoje` : ''}.`;
-    const bh = balancoHidrico(mc, so?.cad || 60, c, m, cd), kp = c ? paramsKc(c) : null;
+    const bh = balancoHidrico(mc, cad, c, m, cd), kp = c ? paramsKc(c) : null; bhR = bh;
     if (bh.fator.base.length && Math.abs(bh.fator.f - 1) >= .03)
       t += ` A ET0 do modelo foi ajustada por um fator de ${bh.fator.f.toFixed(2).replace('.', ',')}, obtido da comparação com a ET0 Penman-Monteith calculada nas estações INMET próximas (o modelo ficou ${bh.fator.base.slice(0, 2).map(b => n1(Math.abs(b.vies_pct)) + '% ' + (b.vies_pct > 0 ? 'acima' : 'abaixo') + ' em ' + esc(b.nome)).join(' e ')}).`;
     if (bh.atual != null) {
-      t += ` O balanço hídrico da zona radicular (FAO-56; água disponível ~${(so?.cad || 60).toFixed(0)} mm pela textura${kp ? `; Kc de ${esc(c.nome.toLowerCase())} ${kp.fonte === 'FAO-56' ? 'da FAO-56' : 'da planilha'}, hoje ~${n1(bh.kcAtual)} na área semeada; p = ${n1(bh.pAtual)}` : ''}) indica <b>${bh.atual.toFixed(0)}%</b> da água disponível no solo`;
+      t += ` O balanço hídrico da zona radicular (FAO-56; água disponível ~${cad.toFixed(0)} mm pela textura${sc ? ' das áreas da cultura' : ''}${kp ? `; Kc de ${esc(c.nome.toLowerCase())} ${kp.fonte === 'FAO-56' ? 'da FAO-56' : 'da planilha'}, hoje ~${n1(bh.kcAtual)} na área semeada; p = ${n1(bh.pAtual)}` : ''}) indica <b>${bh.atual.toFixed(0)}%</b> da água disponível no solo`;
       t += bh.ksAtual < 1 ? `, já abaixo do limite de fácil absorção: há <b>restrição hídrica</b> (Ks = ${bh.ksAtual.toFixed(2).replace('.', ',')}; a planta transpira ~${(100 * bh.ksAtual).toFixed(0)}% do potencial)` : ', sem restrição hídrica (Ks = 1)';
       t += bh.diasEstresse ? `. Nos últimos 30 dias, houve ${bh.diasEstresse} dia${bh.diasEstresse > 1 ? 's' : ''} com restrição (evapotranspiração real ${n0(bh.eta30)} mm frente a ${n0(bh.etc30)} mm potenciais).` : '.';
       if (bh.ksAtual < 1 && m) { pontos += 2; atencao.push(`Restrição hídrica atual (Ks ${bh.ksAtual.toFixed(2).replace('.', ',')}; ${bh.atual.toFixed(0)}% da água disponível)${dCrit ? ', com fases críticas se aproximando' : ''}.`); }
@@ -805,11 +898,109 @@ function gerarAnalise(f) {
   out.push(`<h4>Informações de campo</h4>${tc || '<p>Nenhuma foto ou relato da pasta da equipe se refere a este município.</p>'}`);
   // 5. síntese
   const nivel = pontos >= 5 ? ['Alta', '#b5452f'] : pontos >= 3 ? ['Média', '#d9822b'] : ['Baixa', '#5f8f2a'];
+  if (soDados) return {cd, nome: p.NM_MUN, pontos, nivel, atencao, ks: bhR?.ksAtual, ksFut: bhR?.ksMinFut, diasFut: bhR?.diasEstresseFut, area: m?.area || 0, crit15};
   out.push(`<h4>Pontos de atenção</h4>${atencao.length ? `<ul>${atencao.map(a => `<li>${a}</li>`).join('')}</ul>` : '<p>Nenhum ponto de atenção identificado pelas regras automáticas.</p>'}
     <p>Prioridade sugerida de vistoria: <span class="prio" style="background:${nivel[1]}">${nivel[0]}</span> <span class="nota">(${pontos} pontos: fases críticas próximas, restrição hídrica, extremos de temperatura, chuva na colheita, atraso de semeadura e tempo desde a última visita)</span></p>
     <div class="aviso">Limitações: projeção fenológica por calendário médio (sem graus-dia); clima por município = ponto central, estimado por modelo; solos em escala 1:5.000.000; balanço hídrico FAO-56 com água disponível estimada pela textura, Kc de referência da cultura e condição inicial assumida. Confirme em campo antes de usar nas estimativas.</div>
     <button class="btn sec2" id="bt-copiar">Copiar texto da análise</button>`);
+  ligarCopiar();
+  return out.join('');
+}
+function ligarCopiar() {
   setTimeout(() => { const b = $('bt-copiar'); if (b) b.onclick = () => { const t = $('f-analise').innerText.replace(/Copiar texto da análise$/, '').trim(); navigator.clipboard?.writeText(t).then(() => { b.textContent = 'Copiado ✓'; }); }; });
+}
+
+
+// =====================================================================
+// VISÃO DO ESTADO
+// =====================================================================
+function serieEstado(c) {      // curva estadual de plantio (ponderada pela área; sem área, média simples)
+  const ms = Object.values(c.mun), serie = [];
+  for (let k = 1; k <= 22; k++) { let sw = 0, sv = 0; for (const m of ms) { const w = m.area || 1; sw += w; sv += w * acum(m.serie, k); } serie.push(sw ? sv / sw : null); }
+  return {serie, area: ms.reduce((t, m) => t + (m.area || 0), 0)};
+}
+function climaEstado(c) {      // série diária média do estado (ponderada pela área da cultura, se houver)
+  if (!CL) return null;
+  const pesos = {}; if (c) for (const [cd, m] of Object.entries(c.mun)) pesos[cd] = m.area || 1; else for (const cd in CL.mun) pesos[cd] = 1;
+  const cds = Object.keys(pesos).filter(cd => CL.mun[cd]); if (!cds.length) return null;
+  const out = {}; for (const k of ['p', 'tx', 'tn', 'et0']) out[k] = CL.datas.map((_, i) => { let sw = 0, sv = 0; for (const cd of cds) { const v = CL.mun[cd][k][i]; if (v == null) continue; sw += pesos[cd]; sv += pesos[cd] * v; } return sw ? sv / sw : null; });
+  return {mc: out, cds, pesos};
+}
+function regioes(c, j) {
+  const reg = {}; for (const [cd, m] of Object.entries(c.mun)) { const r = MUN_IDX[cd]?.properties.NM_RGI || '—'; (reg[r] ??= {}).mun ??= {}; reg[r].mun[cd] = m; }
+  return Object.entries(reg).map(([r, o]) => { const pl = mediaMS(o, m => acum(m.serie, j)), cr = mediaMS(o, m => pctCritico(c, m, j)), ant = mediaMS(o, m => acum(m.serie, j - 1));
+    return {r, n: Object.keys(o.mun).length, area: Object.values(o.mun).reduce((t, m) => t + (m.area || 0), 0), pl: pl?.v ?? 0, cr: cr?.v ?? 0, av: (pl?.v ?? 0) - (ant?.v ?? 0)}; });
+}
+function htmlGeralEstado() {
+  const c = cultAtual(); let h = '';
+  if (c) {
+    const pl = mediaMS(c, m => acum(m.serie, semSel)), cr = mediaMS(c, m => pctCritico(c, m, semSel)), se = serieEstado(c), n = Object.keys(c.mun).length;
+    h += `<h3>${esc(c.nome)} · semana de ${fmtD(dataSem(c, semSel))}${dataSem(c, semSel) > HOJE ? ' (projeção)' : ''}</h3>`;
+    h += `<div class="kpis"><div class="kpi"><b>${pl ? pl.v.toFixed(0) : 0}%</b><span>plantado no MS${pl && !pl.pond ? ' (média simples)' : ''}</span></div><div class="kpi"><b>${cr ? cr.v.toFixed(0) : 0}%</b><span>em fase crítica</span></div><div class="kpi"><b>${se.area ? (se.area / 1e6).toLocaleString('pt-BR', {maximumFractionDigits: 1}) + ' mi' : '—'}</b><span>ha informados · ${n} munic.</span></div></div>`;
+    const dist = new Array(c.estadios.length).fill(0); let sw = 0;
+    for (const m of Object.values(c.mun)) { const w = m.area || 1; sw += w; distrib(c, m, semSel).forEach((v, i) => dist[i] += v * w); }
+    h += `<table>${c.estadios.map((e, i) => dist[i] / sw >= .5 ? `<tr><td><i style="background:${corEstadio(c, i)}"></i>${esc(e.nome)}${e.critico ? ' ⚠' : ''}</td><td>${(dist[i] / sw).toFixed(0)}%</td></tr>` : '').join('')}</table>`;
+    const cal = calendarioCritico(c, se);
+    if (cal.length) h += `<div class="nota" style="margin-top:8px">Metade da área semeada no estado atinge (projeção):</div><table>${cal.map(([e, dt]) => `<tr><td>${esc(e)}</td><td>${dt ? fmtD(dt) : '—'}</td></tr>`).join('')}</table>`;
+    h += `<h3>Por região imediata</h3><table>${regioes(c, semSel).sort((a, b) => b.area - a.area || a.r.localeCompare(b.r)).map(r => `<tr><td>${esc(r.r)} <span class="nota" style="margin:0">(${r.n})</span></td><td>${r.pl.toFixed(0)}% · crít. ${r.cr.toFixed(0)}%</td></tr>`).join('')}</table>`;
+  } else h += `<div class="aviso">Conecte a pasta da equipe para ver plantio, fenologia, fotos e relatos do estado.</div>`;
+  const ce = climaEstado(c);
+  if (ce) { const mc = ce.mc, h0 = iHoje(), s = (i0, i1) => mc.p.slice(Math.max(0, i0), i1).reduce((t, x) => t + (x || 0), 0);
+    const geada = ce.cds.filter(cd => CL.mun[cd].tn.slice(h0, h0 + 15).some(t => t != null && t <= 3)).length;
+    h += `<h3>Clima ${c ? 'nas áreas de ' + esc(c.nome.toLowerCase()) : 'no estado'}</h3><div class="nota">Média ${c ? 'ponderada pela área da cultura' : 'dos municípios'} · últimos 30 dias: ${s(h0 - 30, h0).toFixed(0)} mm (estimativa) · próximos 15: ${s(h0, h0 + 15).toFixed(0)} mm (previsão)</div>${graficoClima(mc)}`;
+    if (geada) h += `<div style="color:var(--alerta);font-weight:600;font-size:12.5px">⚠ ${geada} município${geada > 1 ? 's' : ''} com previsão de mínima ≤ 3 °C nos próximos 15 dias</div>`; }
+  h += htmlSoloCultura(null);
+  if (FOTOS.length || RELATOS.length) { const pc = {}; FOTOS.forEach(p => pc[p.cult] = (pc[p.cult] || 0) + 1);
+    h += `<h3>Campo</h3><div class="nota">${FOTOS.length} fotos (${Object.entries(pc).map(([k, v]) => `${esc((CULT[k] || OUTRA).nome)} ${v}`).join(', ')}) · ${RELATOS.length} relatos${RELATOS.length ? ' (último: ' + esc(RELATOS[0].nome) + ', ' + fmtD(RELATOS[0].data) + ')' : ''}</div>`; }
+  return h;
+}
+function trechosCultura(rel, cid, max = 2) {
+  const ps = PALAVRAS_CULT[cid] || []; if (!ps.length) return [];
+  return rel.texto.split(/(?<=[.!?;])\s+|\n+/).map(x => x.trim()).filter(x => x.length > 25 && ps.some(p => norm(x).includes(p))).slice(0, max).map(x => x.length > 320 ? x.slice(0, 317) + '…' : x);
+}
+function gerarAnaliseEstado() {
+  const c = cultAtual(), out = [], cid = c?.cid, cult = c ? esc(c.nome.toLowerCase()) : null;
+  out.push(`<div class="aviso">Análise automática do estado gerada em ${fmtDL(HOJE)} a partir dos dados do painel. Indica situações a verificar e não substitui o levantamento de campo; associações entre indicadores não implicam causa.</div>`);
+  if (!c) { out.push('<p>Conecte a pasta da equipe para gerar a análise estadual por cultura.</p>'); return out.join(''); }
+  // 1. plantio
+  const pl = mediaMS(c, m => acum(m.serie, semSel)), ant = mediaMS(c, m => acum(m.serie, semSel - 1)), se = serieEstado(c), dS = dataSem(c, semSel);
+  const regs = regioes(c, semSel).filter(r => r.area || r.n).sort((a, b) => b.pl - a.pl);
+  let t = `${dS > HOJE ? 'A projeção para a semana de ' + fmtD(dS) + ' indica' : 'Até a semana de ' + fmtD(dS) + ', a semeadura de ' + cult + ' em Mato Grosso do Sul atingiu'} <b>${pl ? pl.v.toFixed(0) : 0}%</b> da área${pl?.pond ? ' (média ponderada pela área informada)' : ''}, com avanço de ${pl && ant ? (pl.v - ant.v).toFixed(0) : 0} pontos percentuais na última semana.`;
+  if (regs.length > 2) t += ` As regiões mais adiantadas são ${regs.slice(0, 2).map(r => `${esc(r.r)} (${r.pl.toFixed(0)}%)`).join(' e ')}; as mais atrasadas, ${regs.slice(-2).reverse().map(r => `${esc(r.r)} (${r.pl.toFixed(0)}%)`).join(' e ')}.`;
+  out.push(`<h4>Situação da safra no estado</h4><p>${t}</p>`);
+  const cal = calendarioCritico(c, se).filter(x => x[1]); let crit15 = 0; for (let j = semSel; j <= semSel + 2; j++) crit15 = Math.max(crit15, mediaMS(c, m => pctCritico(c, m, j))?.v || 0);
+  if (cal.length) out.push(`<p>Pela projeção, metade da área semeada no estado entra em ${esc(cal[0][0])} por volta de <b>${fmtD(cal[0][1])}</b>${cal.length > 1 ? ` e em ${esc(cal.at(-1)[0])} por volta de ${fmtD(cal.at(-1)[1])}` : ''}. ${crit15 >= 1 ? `Nas próximas três semanas, até <b>${crit15.toFixed(0)}%</b> da área estará em fases críticas.` : 'Nas próximas três semanas, a área ainda não deve estar em fases críticas.'}</p>`);
+  // 2. solos da cultura
+  const sc = soloCultura(cid, null);
+  if (sc) { const tc = Object.entries(sc.textura).sort((a, b) => b[1] - a[1]), oc = Object.entries(sc.ordem).sort((a, b) => b[1] - a[1]);
+    out.push(`<h4>Solos ocupados pela cultura</h4><p>Pelo mapa de uso (${n0(sc.area)} ha de ${esc(sc.nome.toLowerCase())} mapeados), a área se distribui assim por textura do solo: ${tc.map(([k, v]) => `${v.toFixed(0)}% ${esc(k.toLowerCase())}`).join('; ')}. Por classe, predominam ${oc.slice(0, 3).map(([k, v]) => `${esc(k.toLowerCase())}s (${v.toFixed(0)}%)`).join(', ')}. ${(sc.textura['Arenosa'] || 0) >= 10 ? `A fração em solos arenosos (${sc.textura['Arenosa'].toFixed(0)}%) é a mais sensível a veranicos.` : 'A maior parte da área está em solos de média a alta retenção de água.'} <span class="nota">(Solos 1:5.000.000.)</span></p>`); }
+  // 3. água no solo por município
+  const linhas = []; let aR = 0, aRF = 0, aT = 0;
+  if (CL) for (const [cd, m] of Object.entries(c.mun)) {
+    const mc = CL.mun[cd], f = MUN_IDX[cd]; if (!mc || !f) continue;
+    const cad = soloCultura(cid, cd)?.cad || soloDoMunicipio(f)?.cad || 60, bh = balancoHidrico(mc, cad, c, m, cd), w = m.area || 1;
+    aT += w; if (bh.ksAtual < 1) aR += w; if (bh.diasEstresseFut) aRF += w; linhas.push({cd, nome: f.properties.NM_MUN, w, bh});
+  }
+  if (aT) {
+    const rest = linhas.filter(l => l.bh.ksAtual < 1).sort((a, b) => b.w - a.w), restF = linhas.filter(l => !(l.bh.ksAtual < 1) && l.bh.diasEstresseFut).sort((a, b) => b.w - a.w);
+    out.push(`<h4>Água no solo (balanço hídrico FAO-56 por município)</h4><p>Hoje, <b>${(100 * aR / aT).toFixed(0)}%</b> da área de ${cult} com dados está em municípios com restrição hídrica (Ks &lt; 1)${rest.length ? `: ${rest.slice(0, 8).map(l => esc(l.nome)).join(', ')}${rest.length > 8 ? ` e mais ${rest.length - 8}` : ''}` : ''}. Mantida a previsão de 15 dias, <b>${(100 * aRF / aT).toFixed(0)}%</b> da área terá dias de restrição${restF.length ? `, incluindo municípios hoje sem restrição como ${restF.slice(0, 5).map(l => esc(l.nome)).join(', ')}` : ''}.</p>`);
+  }
+  const ce = climaEstado(c);
+  if (ce) { const mc = ce.mc, h0 = iHoje(), s = (k, i0, i1) => mc[k].slice(Math.max(0, i0), i1).reduce((t, x) => t + (x || 0), 0);
+    const geada = ce.cds.filter(cd => CL.mun[cd].tn.slice(h0, h0 + 15).some(t => t != null && t <= 3)).map(cd => MUN_IDX[cd]?.properties.NM_MUN).filter(Boolean);
+    const calor = ce.cds.filter(cd => CL.mun[cd].tx.slice(h0, h0 + 15).some(t => t != null && t >= 35)).length;
+    out.push(`<h4>Clima nas áreas da cultura</h4><p>Nos últimos 30 dias, a chuva média ponderada pela área foi de ${s('p', h0 - 30, h0).toFixed(0)} mm (estimativa de modelo), e a previsão para os próximos 15 dias é de ${s('p', h0, h0 + 15).toFixed(0)} mm. ${calor ? `${calor} município${calor > 1 ? 's' : ''} com a cultura ${calor > 1 ? 'têm' : 'tem'} máxima prevista ≥ 35 °C. ` : ''}${geada.length ? `Há previsão de mínima ≤ 3 °C em ${geada.length} município${geada.length > 1 ? 's' : ''} (${geada.slice(0, 6).map(esc).join(', ')}${geada.length > 6 ? '…' : ''}).` : ''}</p>`); }
+  // 4. campo
+  const fts = FOTOS.filter(x => x.cult === cid), rels = RELATOS.filter(r => r.cults.has(cid));
+  let tc = `<p>${fts.length} foto${fts.length === 1 ? '' : 's'} de ${cult} e ${rels.length} relato${rels.length === 1 ? '' : 's'} que citam a cultura.</p>`;
+  rels.slice(0, 3).forEach(r => { const tr = trechosCultura(r, cid); if (tr.length) tc += `<div class="nota"><b>${esc(r.nome)}</b> · ${fmtD(r.data)}</div>${tr.map(x => `<div class="trecho">“${esc(x)}”</div>`).join('')}`; });
+  out.push(`<h4>Informações de campo</h4>${tc}`);
+  // 5. prioridades
+  const rank = Object.keys(c.mun).map(cd => MUN_IDX[cd]).filter(Boolean).map(f => gerarAnalise(f, true)).sort((a, b) => b.pontos - a.pontos || b.area - a.area);
+  const cont = {Alta: 0, 'Média': 0, Baixa: 0}; rank.forEach(r => cont[r.nivel[0]]++);
+  out.push(`<h4>Prioridades de vistoria</h4><p>Pelas regras automáticas: ${cont.Alta} município${cont.Alta === 1 ? '' : 's'} com prioridade alta, ${cont['Média']} média e ${cont.Baixa} baixa.</p>
+    <table>${rank.slice(0, 12).map(r => `<tr><td><span class="prio" style="background:${r.nivel[1]};font-size:11px">${r.nivel[0]}</span> ${esc(r.nome)}<div class="nota" style="margin:2px 0 0">${r.atencao[0] ? r.atencao[0].replace(/<[^>]+>/g, '') : 'sem ponto de atenção'}</div></td><td>${r.pontos} pt</td></tr>`).join('')}</table>`);
+  out.push(`<div class="aviso">Limitações: projeção fenológica por calendário médio; clima por município no ponto central (modelo); solos em escala 1:5.000.000; balanço hídrico FAO-56 com água disponível estimada pela textura. Confirme em campo.</div><button class="btn sec2" id="bt-copiar">Copiar texto da análise</button>`);
   return out.join('');
 }
 
@@ -850,7 +1041,11 @@ const METODOLOGIA = `
 <p><b>Coeficiente de cultura (Kc).</b> Os valores de referência são os da FAO-56 (tabela 12) para cada cultura (Kc inicial / médio / final): soja 0,40 / 1,15 / 0,50; milho 0,30 / 1,20 / 0,60; sorgo 0,30 / 1,05 / 0,55; amendoim 0,40 / 1,15 / 0,60; arroz 1,05 / 1,20 / 0,75; feijão 0,40 / 1,15 / 0,35; algodão 0,35 / 1,18 / 0,60; trigo 0,30 / 1,15 / 0,30; aveia 0,30 / 1,15 / 0,25. Podem ser substituídos pela equipe na aba Parâmetros da planilha. A curva de Kc segue os estádios da planilha: valor inicial até o segundo estádio, subida linear até o primeiro estádio crítico, valor médio até o fim das fases críticas e queda linear até a colheita. Na área colhida ou não semeada usa-se 0,30 (solo com palhada). Cada semana de semeadura é tratada como um grupo com sua própria idade, e o Kc do município é a média ponderada pela área semeada em cada semana.</p>
 <p><b>Balanço hídrico da zona radicular (FAO-56, capítulo 8).</b> O cálculo é diário, de 45 dias antes de hoje até 15 dias de previsão. A água total disponível (TAW) é estimada pela textura predominante para 60 cm de raízes (arenosa ~40 mm, média ~65 mm, argilosa ~90 mm). A água facilmente disponível é RAW = p·TAW, com p de cada cultura (tabela 22; soja 0,50, milho 0,55, feijão 0,45, algodão 0,65 etc.), ajustado pela demanda do dia (p + 0,04·(5 − ETc)). Quando a depleção ultrapassa a RAW, a evapotranspiração real é reduzida pelo coeficiente de estresse Ks = (TAW − Dr)/((1 − p)·TAW). A chuva entra integralmente, e o excedente acima da capacidade é perdido por drenagem. A depleção inicial é assumida em 50% da TAW, e os primeiros 15 dias servem de ajuste. Ks &lt; 1 indica restrição hídrica.</p>
 <h3>8. Fotos de campo</h3>
-<p>A cultura de cada foto é identificada pela subpasta (por exemplo “04_Fotos_Campo/Soja”). A posição é lida do GPS gravado na foto (EXIF); quando a foto não tem GPS, como as enviadas pelo WhatsApp, o painel lê por reconhecimento de texto (OCR) o carimbo de data e coordenadas impresso na imagem pelo aplicativo de câmera. O município é obtido pela sobreposição do ponto com a malha municipal.</p>
+<p>A cultura de cada foto é identificada pela subpasta (por exemplo “04_Fotos_Campo/Soja”). A posição é lida do GPS gravado na foto (EXIF). Quando a foto não tem GPS, como as enviadas pelo WhatsApp, o painel lê por reconhecimento de texto (OCR) o carimbo de data e coordenadas impresso na imagem pelo aplicativo de câmera. São tentados textos vermelhos, amarelos e brancos (no branco, exige-se contorno escuro), no rodapé e no topo da foto, com uma segunda leitura restrita a dígitos. Leituras com o separador decimal perdido são reparadas apenas quando o resultado cai dentro da faixa geográfica de MS (17°–24,3° S; 50,7°–58,4° O). Entre as datas lidas, vale a mais frequente. O município é obtido pela sobreposição do ponto com a malha municipal.</p>
+<h3>8a. Solos ocupados por cada cultura</h3>
+<p>Para as culturas com mapa de uso e cobertura (atualmente soja, cana-de-açúcar e milho do arquivo MS26S1UCS), a rotina automática sobrepõe os polígonos da cultura ao mapa de solos e à malha municipal, em projeção de áreas iguais, e soma a área (ha) por classe e por textura de solo, em cada município e no estado. Esses percentuais aparecem na ficha, na análise e no resumo em PDF. Na análise, a água disponível usada no balanço hídrico passa a ser a das áreas ocupadas pela cultura, e não a do município inteiro. A escala do mapa de solos (1:5.000.000) limita a interpretação ao nível regional.</p>
+<h3>8b. Visão do estado</h3>
+<p>A ficha do estado agrega os municípios com dados: médias ponderadas pela área informada, distribuição por estádio, calendário das fases críticas a partir da curva estadual de semeadura e indicadores por região imediata. O clima é a média diária dos municípios com a cultura, ponderada pela área. A análise estadual roda o balanço hídrico de cada município, informa a fração da área com restrição hídrica (Ks &lt; 1) hoje e na previsão, e ordena os municípios pela pontuação de prioridade de vistoria.</p>
 <h3>9. Relatos de viagem</h3>
 <p>São lidos arquivos .docx, .pdf, .txt e .md. A data vem do nome do arquivo (AAAA-MM-DD), da primeira data no texto ou da data de modificação. Os municípios citados são identificados pelo nome (com inicial maiúscula, ignorando acentos) e as culturas por palavras-chave. A análise mostra os trechos que citam o município e a cultura.</p>
 <h3>10. Análise agronômica automática e prioridade de vistoria</h3>
@@ -976,6 +1171,11 @@ async function gerarPDF(ini, fim, sel, opts) {
     const dist = new Array(c.estadios.length).fill(0); let sw = 0;
     for (const m of Object.values(c.mun)) { const w = m.area || 1; sw += w; distrib(c, m, jb).forEach((v, i) => dist[i] += v * w); }
     tabela(['Estádio em ' + fmtD(fim), '% da área da cultura', 'Crítico?'], c.estadios.map((e, i) => [e.nome, (dist[i] / sw).toFixed(0) + '%', e.critico ? 'sim' : '']).filter(r => r[1] !== '0%'), {tableWidth: 120});
+    // solos ocupados pela cultura (mapa de uso x solos)
+    const scP = soloCultura(cid, null);
+    if (scP) { tabela(['Textura do solo (áreas de ' + scP.nome.toLowerCase() + ' mapeadas)', '% da área'], Object.entries(scP.textura).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, v.toFixed(1) + '%']), {tableWidth: 120});
+      tabela(['Classe de solo', '% da área'], Object.entries(scP.ordem).sort((a, b) => b[1] - a[1]).filter(([, v]) => v >= .1).map(([k, v]) => [k, v.toFixed(1) + '%']), {tableWidth: 120});
+      par(`Cruzamento de ${n0(scP.area)} ha de ${scP.nome.toLowerCase()} do mapa de uso com o mapa de solos IBGE/Embrapa 1:5.000.000.`, 7.5, CINZA); }
     // regiões imediatas
     const reg = {}; for (const [cd, m] of Object.entries(c.mun)) { const r = MUN_IDX[cd]?.properties.NM_RGI || '—'; (reg[r] ??= []).push(m); }
     tabela(['Região imediata', 'Municípios', 'Área (ha)', '% plantado no início', '% plantado no fim', '% fase crítica no fim'], Object.entries(reg).sort().map(([r, ms]) => {
@@ -1026,6 +1226,7 @@ async function gerarPDF(ini, fim, sel, opts) {
 // =====================================================================
 document.querySelectorAll('#fundo button').forEach(b => b.onclick = () => { document.querySelectorAll('#fundo button').forEach(x => x.classList.toggle('on', x === b)); mapa.removeLayer(fundoAtual); fundoAtual = fundos[b.dataset.f]; if (fundoAtual) fundoAtual.addTo(mapa); });
 $('menu').onclick = () => $('lado').classList.toggle('fechado');
+$('bt-estado').onclick = () => { $('busca').value = ''; mapa.fitBounds(L.geoJSON(dadosMun).getBounds(), {paddingBottomRight: [400, 0]}); selecionar(ESTADO); };
 $('busca').onchange = e => { const f = dadosMun?.features.find(x => norm(x.properties.NM_MUN) === norm(e.target.value)); if (f) { mapa.fitBounds(L.geoJSON(f).getBounds(), {paddingBottomRight: [400, 0]}); selecionar(f); } };
 (async () => {
   const [man, mun, solo] = await Promise.all([pegar('dados/manifesto.json'), pegar('dados/municipios.geojson'), pegar('dados/solos.geojson')]);
@@ -1047,5 +1248,5 @@ $('busca').onchange = e => { const f = dadosMun?.features.find(x => norm(x.prope
   L.geoJSON(mun, {pane: 'clique', style: {stroke: false, fill: true, fillOpacity: 0}, onEachFeature: (f, l) => {
     l.on('click', () => selecionar(f)); l.bindTooltip(f.properties.NM_MUN, {sticky: true, direction: 'top', opacity: .9}); }}).addTo(mapa);
   mapa.fitBounds(L.geoJSON(mun).getBounds(), {padding: [10, 10]});
-  garantirClima(); pegar('dados/clima/estacoes_inmet.json').then(e => { EST = e; }); pegar('dados/clima/validacao_et0.json').then(v => { VAL = v; for (const k in _fat) delete _fat[k]; });
+  garantirClima(); pegar('dados/clima/estacoes_inmet.json').then(e => { EST = e; }); pegar('dados/clima/validacao_et0.json').then(v => { VAL = v; for (const k in _fat) delete _fat[k]; }); pegar('dados/solo_cultura.json').then(v => { SOLO_CULT = v; });
 })();

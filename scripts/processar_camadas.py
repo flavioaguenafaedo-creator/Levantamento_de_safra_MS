@@ -126,6 +126,7 @@ def textura(t):
     return "Indiscriminada"
 
 
+SOLOS_MS = None
 for f in shps("solos")[:1]:
     g = ler(f)
     g = g[g.intersects(area_ms)]
@@ -146,23 +147,53 @@ for f in shps("solos")[:1]:
     s = s.explode(index_parts=False)
     s = s[s.geom_type.isin(["Polygon", "MultiPolygon"])]
     salvar(s, "solos", TOL_SOLO)
+    SOLOS_MS = s[s.ordem != "Corpo d'água"].copy()
     log.append(f"solos: fonte {f.name}")
 
 # ------------------------------------------------------------ uso do solo
 CODIGOS_USO = {"SOJ": "Soja", "CAN": "Cana-de-açúcar", "MIL": "Milho", "PST": "Pastagem", "REM": "Remanescente/vegetação",
                "EUC": "Eucalipto", "PIN": "Pinus", "SER": "Seringueira", "OUT": "Outros usos"}
+USO_BRUTO = []
 for f in shps("uso_solo"):
     g = ler(f)
     g = gpd.clip(g[g.intersects(area_ms)], area_ms)
     c = coluna(g, "UCS", "CLASSE", "CLASS", "USO", "CULTURA", "DESCRICAO")
     classe = g[c].astype(str).str.strip().str.upper().map(lambda v: CODIGOS_USO.get(v, v.title())) if c else f.stem
     g = g.assign(classe=classe)[["classe", "geometry"]]
+    USO_BRUTO.append((f.name, g.copy()))
     # área em ha (projeção equivalente) antes de simplificar
     g["area_ha"] = g.to_crs("ESRI:102033").area / 1e4
     g = g.dissolve("classe", as_index=False, aggfunc={"area_ha": "sum"})
     g["area_ha"] = g["area_ha"].round(0)
     salvar(g, f"uso_{f.stem.lower()}", TOL_USO)
 
+
+# ------------------------------------------------- solos ocupados por cada cultura (uso x solos x municípios)
+# Área (ha, projeção equivalente) de cada classe de uso agrícola por classe e textura de solo, por município e no estado.
+CULTURAS_USO = {"Soja", "Cana-de-açúcar", "Milho", "Algodão", "Arroz", "Feijão", "Sorgo", "Trigo", "Aveia", "Amendoim"}
+if SOLOS_MS is not None and USO_BRUTO:
+    EQ = "ESRI:102033"
+    unid = gpd.overlay(SOLOS_MS[["ordem", "textura", "geometry"]].to_crs(EQ),
+                       municipios[["CD_MUN", "geometry"]].to_crs(EQ), how="intersection", keep_geom_type=True)
+    saida = {"descricao": "Área (ha) de cada cultura mapeada por classe e textura de solo. Solos: IBGE/Embrapa 1:5.000.000; uso: arquivos de dados/entrada/uso_solo.",
+             "gerado": datetime.now(timezone.utc).isoformat(timespec="seconds"), "culturas": {}}
+    for arq, g in USO_BRUTO:
+        for cl in sorted(set(g["classe"]) & CULTURAS_USO):
+            u = g[g["classe"] == cl].to_crs(EQ)
+            x = gpd.overlay(u[["geometry"]], unid, how="intersection", keep_geom_type=True)
+            x["ha"] = x.area / 1e4
+            res = saida["culturas"].setdefault(cl, {"arquivos": [], "estado": {"area": 0, "ordem": {}, "textura": {}}, "mun": {}})
+            res["arquivos"].append(arq)
+            for (cd, ordem_, tex), ha in x.groupby(["CD_MUN", "ordem", "textura"])["ha"].sum().items():
+                cd = str(int(cd)); m = res["mun"].setdefault(cd, {"area": 0, "ordem": {}, "textura": {}})
+                for alvo in (m, res["estado"]):
+                    alvo["area"] += ha
+                    alvo["ordem"][ordem_] = alvo["ordem"].get(ordem_, 0) + ha
+                    alvo["textura"][tex] = alvo["textura"].get(tex, 0) + ha
+            log.append(f"solo_cultura: {cl} ({arq}) {res['estado']['area']:,.0f} ha cruzados com solos")
+    def arred(o):
+        return {k: (round(v) if isinstance(v, float) else arred(v) if isinstance(v, dict) else v) for k, v in o.items()}
+    (SAI / "solo_cultura.json").write_text(json.dumps({**saida, "culturas": {k: arred(v) for k, v in saida["culturas"].items()}}, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
 # ------------------------------------------------------- infraestrutura (rodovias etc.)
 for f in shps("infraestrutura"):
