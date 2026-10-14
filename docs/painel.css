@@ -37,6 +37,7 @@ h1{font-size:16px;margin:0;font-weight:600;letter-spacing:-.01em;line-height:1.2
 .sem span{font:500 12px "IBM Plex Mono",monospace;white-space:nowrap}
 .seg{display:flex;border:1px solid var(--linha);border-radius:7px;overflow:hidden}
 .seg button{flex:1;border:0;background:transparent;color:var(--suave);padding:5px 4px;font-size:12px;cursor:pointer;line-height:1.25}
+.seg-wrap{flex-wrap:wrap}.seg-wrap button{flex:1 1 45%;border-bottom:1px solid var(--linha)}
 .seg button.on{background:var(--acento);color:var(--painel);font-weight:500}
 .fundo{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:12px;color:var(--suave)}.fundo .seg{flex:1}
 
@@ -100,6 +101,8 @@ details.grupo>summary .cont{margin-left:auto;font-weight:400;color:var(--suave);
 .kpi{background:var(--bg);border-radius:8px;padding:7px 8px}
 .kpi b{display:block;font-size:17px;font-weight:600}.kpi span{font-size:11px;color:var(--suave)}
 .graf text{fill:var(--suave)}
+.tab-ag th{font-size:10.5px;font-weight:500;color:var(--suave);text-align:right;padding:2px 3px;line-height:1.2}.tab-ag th:first-child{text-align:left}
+.tab-ag td{text-align:right;padding:3px;font-size:12px}.tab-ag td:first-child{text-align:left}
 .analise p{margin:0 0 10px}.analise h4{margin:14px 0 4px;font-size:13px}
 .analise ul{margin:4px 0 10px;padding-left:18px}.analise li{margin-bottom:4px}
 .aviso{background:var(--bg);border-left:3px solid var(--acento2);padding:8px 10px;border-radius:6px;font-size:12px;color:var(--suave);margin:10px 0}

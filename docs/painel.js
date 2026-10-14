@@ -16,6 +16,7 @@ const dISO = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0'
 const deISO = s => new Date(s + 'T12:00:00');
 const n0 = v => v == null || isNaN(v) ? '—' : Math.round(v).toLocaleString('pt-BR');
 const n1 = v => v == null || isNaN(v) ? '—' : v.toLocaleString('pt-BR', {minimumFractionDigits: 1, maximumFractionDigits: 1});
+const n2 = v => v == null || isNaN(v) ? '—' : v.toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const pegar = u => fetch(u + (u.includes('?') ? '&' : '?') + 'v=' + Date.now()).then(r => r.ok ? r.json() : null).catch(() => null);
 const lsGet = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (e) { return d; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
@@ -321,15 +322,16 @@ function kcCurva(c, das) {
   return KC_PALHADA;
 }
 // Kc médio da área semeada numa data: cada semana de semeadura é uma coorte com sua idade
-function kcArea(c, m, data) {
-  let soma = 0, peso = 0, ant = 0;
+function kcInfo(c, m, data) {   // kc médio da área semeada e % dessa área ainda em campo (não colhida)
+  let soma = 0, peso = 0, ant = 0, campo = 0; const Dh = c.estadios.at(-1).dias;
   for (let w = 1; w <= m.serie.length; w++) {
     const ac = acum(m.serie, w), inc = ac - ant; ant = ac; if (inc <= 0) continue;
     const das = (data - addD(dataSem(c, w), -3.5)) / 864e5; if (das < 0) continue;
-    soma += inc * kcCurva(c, das); peso += inc;
+    soma += inc * kcCurva(c, das); peso += inc; if (das < Dh) campo += inc;
   }
-  return peso >= 1 ? soma / peso : null;
+  return peso >= 1 ? {kc: soma / peso, campo} : null;
 }
+function kcArea(c, m, data) { return kcInfo(c, m, data)?.kc ?? null; }
 function corEstadio(c, i) {
   const E = c?.estadios; if (!E || i == null || i < 0) return null;
   const crit = E.map((e, k) => e.critico ? k : -1).filter(k => k >= 0), a = crit.length ? crit[0] : E.length, b = crit.length ? crit.at(-1) : E.length;
@@ -401,6 +403,7 @@ function aoMudarCultura() {
   habilitar('plantio', true); setSt('plantio', '');
   if (CAM.plantio.layer) CAM.plantio.layer.setStyle(CAM.plantio.estilo); else if (CAM.plantio.on) redesenhar('plantio');
   atualizarSub('plantio');
+  atualizarAgua();
   if (CAM.fotos.seguir) redesenhar('fotos'), atualizarSub('fotos');
   if (selecionado) abrirFicha(selecionado, true);
 }
@@ -451,6 +454,65 @@ defCam('clima', {grupo: 'clima', nome: 'Clima por município', op: .8,
   depois: () => { const p = $('cl-per'), v = $('cl-var'); if (!p) return; p.value = clPer; v.value = clVar; p.disabled = clVar === 'seco';
     p.onchange = () => { clPer = p.value; CAM.clima.layer && CAM.clima.layer.setStyle(CAM.clima.estilo); atualizarSub('clima'); };
     v.onchange = () => { clVar = v.value; CAM.clima.layer && CAM.clima.layer.setStyle(CAM.clima.estilo); atualizarSub('clima'); }; }});
+// ------------------------------------------------- água no solo para a cultura escolhida (balanço hídrico FAO-56)
+// Classes pelo Ks (fração da transpiração potencial que a lavoura consegue manter) ou pela demanda atendida (ΣETa/ΣETc).
+// A demanda é a de cada cultura: ETc = ET0 × Kc da fase (FAO-56), e o limite de estresse usa o p da cultura.
+const CLS_AG = [{k: 'ok', nome: 'Atendida', cor: '#3f9a4c'}, {k: 'leve', nome: 'Restrição leve', cor: '#f0c541'},
+  {k: 'mod', nome: 'Restrição moderada', cor: '#e8803f'}, {k: 'sev', nome: 'Restrição severa', cor: '#b5302a'}];
+const COR_SEMCAMPO = '#bdbdbd';
+const classeKs = ks => ks == null ? null : ks >= .99 ? 0 : ks >= .7 ? 1 : ks >= .4 ? 2 : 3;
+const classeAt = a => a == null ? null : a >= 95 ? 0 : a >= 80 ? 1 : a >= 60 ? 2 : 3;
+const MODOS_AG = {hoje: 'Hoje', fut: 'Pior dia (15 dias)', at30: 'Demanda atendida (30 dias)', at15: 'Demanda atendida (próx. 15)'};
+let agVis = 'hoje', BHC = null;
+function cadMun(cid, cd) { const f = MUN_IDX[cd]; return soloCultura(cid, cd)?.cad || (f && soloDoMunicipio(f)?.cad) || 60; }
+function bhCultura(c) {   // balanço de todos os municípios da cultura, em cache
+  if (!c || !CL) return null;
+  const chave = [safraSel, cultSel, CL.gerado, !!VAL, !!SOLO_CULT, !!dadosSolo].join('|');
+  if (BHC?.chave === chave) return BHC.mun;
+  const mun = {};
+  for (const [cd, m] of Object.entries(c.mun)) { const mc = CL.mun[cd]; if (mc) mun[cd] = balancoHidrico(mc, cadMun(c.cid, cd), c, m, cd); }
+  BHC = {chave, mun}; return mun;
+}
+function classeAgua(bh) {   // índice da classe, -1 = sem lavoura em campo, null = sem dado
+  if (!bh) return null;
+  if (agVis === 'hoje') return bh.campoAtual > 0 ? classeKs(bh.ksAtual) : -1;
+  if (agVis === 'fut') return bh.ksMinFutCampo == null ? -1 : classeKs(bh.ksMinFutCampo);
+  const a = agVis === 'at30' ? bh.atend30 : bh.atendFut; return a == null ? -1 : classeAt(a);
+}
+defCam('agua', {grupo: 'clima', nome: 'Água no solo', op: .8, desab: true, st: 'conecte a pasta',
+  estilo: f => { const c = cultAtual(), cd = String(+f.properties.CD_MUN), B = bhCultura(c);
+    if (!c || !B || !c.mun[cd]) return {pane: 'clima', fill: false, stroke: false};
+    const k = classeAgua(B[cd]); if (k == null) return {pane: 'clima', fill: false, stroke: false};
+    return {pane: 'clima', fillColor: k < 0 ? COR_SEMCAMPO : CLS_AG[k].cor, fillOpacity: OPC('agua') * (k < 0 ? .6 : 1), weight: 0, stroke: false}; },
+  montar: async () => { await garantirClima(); const c = cultAtual(); if (!c || !CL) { setSt('agua', !CL ? 'sem clima ainda' : 'escolha a cultura'); return null; }
+    const L_ = L.geoJSON(dadosMun, {interactive: false, style: CAM.agua.estilo}); atualizarSub('agua'); return L_; },
+  sub: () => {
+    const c = cultAtual(); if (!c) return '';
+    const B = CL ? bhCultura(c) : null, kp = paramsKc(c), area = new Array(4).fill(0); let semCampo = 0, tot = 0;
+    if (B) for (const [cd, bh] of Object.entries(B)) { const w = c.mun[cd]?.area || 1, k = classeAgua(bh); if (k == null) continue; tot += w; if (k < 0) semCampo += w; else area[k] += w; }
+    const comCampo = tot - semCampo, crit = agVis.startsWith('at') ? ['≥ 95%', '80–95%', '60–80%', '< 60%'] : ['Ks = 1', 'Ks 0,7–0,99', 'Ks 0,4–0,7', 'Ks < 0,4'];
+    const res = comCampo ? `<div class="barra">${area.map((v, k) => `<i title="${CLS_AG[k].nome}: ${(100 * v / comCampo).toFixed(0)}%" style="width:${100 * v / comCampo}%;background:${CLS_AG[k].cor}"></i>`).join('')}</div>
+      Área com lavoura em campo: ${area.map((v, k) => `${CLS_AG[k].nome.toLowerCase()} <b>${(100 * v / comCampo).toFixed(0)}%</b>`).join(' · ')}` : (B ? 'Nenhum município com lavoura em campo no período.' : '');
+    return `<div class="seg seg-wrap" id="modo-ag">${Object.entries(MODOS_AG).map(([k, n]) => `<button data-v="${k}" class="${agVis === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+      <div class="resumo">${res}</div>
+      <div class="leg">${CLS_AG.map((x, k) => `<div><i style="background:${x.cor}"></i>${x.nome} (${crit[k]})</div>`).join('')}<div><i style="background:${COR_SEMCAMPO}"></i>Sem lavoura em campo</div></div>
+      <div class="nota">Demanda de ${esc(c.nome.toLowerCase())}: ETc = ET0 × Kc (${n2(kp.ini)} no início, ${n2(kp.mid)} no pico, ${n2(kp.fim)} no fim; ${kp.fonte}), seguindo a fase de cada semana de semeadura da planilha. Estresse começa quando a água cai abaixo de ${(100 * (1 - kp.p)).toFixed(0)}% da disponível (p = ${n2(kp.p)}). Água disponível pela textura do solo sob a cultura. ${agVis.startsWith('at') ? 'Demanda atendida = consumo estimado ÷ consumo potencial nos dias com lavoura em campo.' : 'Ks = fração da transpiração potencial que a lavoura consegue manter.'} Clique no município para ver o gráfico.</div>`;
+  },
+  depois: () => document.querySelectorAll('#modo-ag button').forEach(b => b.onclick = () => { agVis = b.dataset.v; CAM.agua.layer && CAM.agua.layer.setStyle(CAM.agua.estilo); atualizarSub('agua'); })});
+function dicaMun(f) {   // dica ao passar o mouse; com a camada de água ligada, mostra a situação da cultura
+  const nome = esc(f.properties.NM_MUN), c = cultAtual(); if (!CAM.agua?.on || !c || !CL) return nome;
+  const bh = bhCultura(c)?.[String(+f.properties.CD_MUN)]; if (!bh) return `${nome}<br><span style="opacity:.75">sem ${esc(c.nome.toLowerCase())} na planilha</span>`;
+  const k = classeAgua(bh), cls = k == null ? '' : k < 0 ? 'sem lavoura em campo' : CLS_AG[k].nome.toLowerCase();
+  const det = agVis === 'hoje' ? `água ${n0(bh.atual)}% · Ks ${n2(bh.ksAtual)} · demanda ${n1(bh.etcHoje)} mm/dia` : agVis === 'fut' ? `pior Ks ${n2(bh.ksMinFutCampo)} · água mín. ${n0(bh.minFut)}%`
+    : agVis === 'at30' ? `${n0(bh.atend30)}% de ${n0(bh.dem30)} mm de demanda` : `${n0(bh.atendFut)}% de ${n0(bh.demFut)} mm de demanda`;
+  return `${nome}<br><b>${cls}</b>${k >= 0 ? '<br>' + det : ''}`;
+}
+function atualizarAgua() {
+  if (!CAM.agua) return; const c = cultAtual();
+  habilitar('agua', !!c); if (c) setSt('agua', '');
+  if (CAM.agua.layer) CAM.agua.layer.setStyle(CAM.agua.estilo); else if (CAM.agua.on) redesenhar('agua');
+  atualizarSub('agua');
+}
 function graficoEst(e) {
   const ds = Object.keys(e.serie).slice(-30); if (!ds.length) return ''; const W = 280, H = 70, bw = W / ds.length, pm = Math.max(10, ...ds.map(d => e.serie[d].p || 0));
   return `<svg class="graf" viewBox="0 0 ${W} ${H + 14}" width="100%" font-size="10">${ds.map((d, i) => { const p = e.serie[d].p || 0, h = H * p / pm; return `<rect x="${i * bw + 1}" y="${H - h}" width="${bw - 2}" height="${h}" fill="#2171b5"><title>${d}: ${p} mm</title></rect>`; }).join('')}<line x1="0" x2="${W}" y1="${H}" y2="${H}" stroke="#ccc"/><text x="0" y="${H + 12}">${fmtD(deISO(ds[0]))}</text><text x="${W}" y="${H + 12}" text-anchor="end">${fmtD(deISO(ds.at(-1)))}</text></svg>`;
@@ -784,6 +846,57 @@ function graficoClima(m) {
     <text x="0" y="${H + 12}">${fmtD(deISO(CL.datas[a]))}</text><text x="${xh}" y="${H + 12}" text-anchor="middle">hoje</text><text x="${W}" y="${H + 12}" text-anchor="end">${fmtD(deISO(CL.datas[b - 1]))}</text>
     <text x="0" y="${H + 25}" fill="#2171b5">■ chuva (máx ${pm.toFixed(0)} mm)</text><text x="${W}" y="${H + 25}" text-anchor="end"><tspan fill="#d9472b">— máx</tspan> <tspan fill="#3b6fb6">— mín</tspan> ${tmin.toFixed(0)}–${tmax.toFixed(0)} °C</text></svg>`;
 }
+// gráfico do balanço: água no solo (% da disponível) com as faixas "água fácil" e "estresse" (limite = 1 − p da cultura),
+// chuva em barras e, embaixo, uma fita com a classe de Ks de cada dia
+function graficoAgua(bh) {
+  const S = bh.serie, n = S.length; if (!n) return '';
+  const W = 300, H = 100, bw = W / n, y = v => H - Math.max(0, Math.min(100, v)) / 100 * H, xc = j => (j + .5) * bw;
+  const pm = Math.max(20, ...S.map(s => s.chuva)), jh = S.findIndex(s => s.futuro), xh = jh < 0 ? W : jh * bw;
+  const lim = S.map((s, j) => `${j ? 'L' : 'M'}${xc(j).toFixed(1)},${y(100 * (1 - s.p)).toFixed(1)}`).join('');
+  const zonaEst = `M0,${H} L0,${y(100 * (1 - S[0].p)).toFixed(1)} ${lim.replace(/^M/, 'L')} L${W},${y(100 * (1 - S[n - 1].p)).toFixed(1)} L${W},${H} Z`;
+  const linha = l => l.map(([s, j], k) => `${k ? 'L' : 'M'}${xc(j).toFixed(1)},${y(s.pct).toFixed(1)}`).join('');
+  const passado = S.map((s, j) => [s, j]).filter(([s]) => !s.futuro), fut = S.map((s, j) => [s, j]).filter(([s], j) => s.futuro || j === jh - 1);
+  const corDia = s => s.campo > 0 ? CLS_AG[classeKs(s.ks)].cor : COR_SEMCAMPO, d = s => fmtD(deISO(CL.datas[s.i]));
+  return `<svg class="graf" viewBox="0 0 ${W} ${H + 40}" width="100%" font-size="10" style="overflow:visible">
+    <rect x="0" y="0" width="${W}" height="${H}" fill="#3f9a4c" opacity=".10"/><path d="${zonaEst}" fill="#e8803f" opacity=".16"/>
+    <path d="${lim}" fill="none" stroke="#e8803f" stroke-width="1" stroke-dasharray="3 2"/>
+    <rect x="${xh}" y="0" width="${W - xh}" height="${H}" fill="currentColor" opacity=".05"/><line x1="${xh}" x2="${xh}" y1="0" y2="${H}" stroke="currentColor" opacity=".35"/>
+    ${S.map((s, j) => { const hh = H * .4 * s.chuva / pm; return hh > .2 ? `<rect x="${(j * bw + .4).toFixed(1)}" y="${(H - hh).toFixed(1)}" width="${Math.max(1, bw - .8).toFixed(1)}" height="${hh.toFixed(1)}" fill="#2171b5" opacity=".65"/>` : ''; }).join('')}
+    <path d="${linha(passado)}" fill="none" style="stroke:var(--azul)" stroke-width="2"/><path d="${linha(fut)}" fill="none" style="stroke:var(--azul)" stroke-width="2" stroke-dasharray="4 3"/>
+    <text x="3" y="10" fill="#3f9a4c" style="fill:#3f9a4c">água fácil</text><text x="3" y="${H - 3}" style="fill:#c0612a">estresse</text>
+    ${S.map((s, j) => `<rect x="${(j * bw).toFixed(1)}" y="${H + 3}" width="${(bw + .2).toFixed(1)}" height="6" fill="${corDia(s)}"/>`).join('')}
+    ${S.map((s, j) => `<rect x="${(j * bw).toFixed(1)}" y="0" width="${bw.toFixed(1)}" height="${H + 9}" fill="transparent"><title>${d(s)}${s.futuro ? ' (previsão)' : ''}\nágua no solo ${s.pct.toFixed(0)}% · chuva ${s.chuva.toFixed(0)} mm\nKc ${n2(s.kc)} · demanda ${n1(s.etc)} mm · consumo ${n1(s.eta)} mm · Ks ${n2(s.ks)}${s.campo > 0 ? '' : '\n(sem lavoura em campo)'}</title></rect>`).join('')}
+    <text x="0" y="${H + 20}">${d(S[0])}</text>${jh > 0 ? `<text x="${xh}" y="${H + 20}" text-anchor="middle">hoje</text>` : ''}<text x="${W}" y="${H + 20}" text-anchor="end">${d(S[n - 1])}</text>
+    <text x="0" y="${H + 34}"><tspan style="fill:var(--azul)">— água no solo (% da disponível)</tspan> <tspan style="fill:#2171b5">■ chuva (máx ${pm.toFixed(0)} mm)</tspan></text></svg>`;
+}
+function htmlAgua(f, c, m, mc) {
+  const cd = String(+f.properties.CD_MUN), bh = bhCultura(c)?.[cd] || balancoHidrico(mc, cadMun(c.cid, cd), c, m, cd), kp = paramsKc(c);
+  const k = bh.campoAtual > 0 ? classeKs(bh.ksAtual) : -1, cls = k < 0 ? 'Sem lavoura em campo' : CLS_AG[k].nome;
+  let h = `<h3>Água no solo · ${esc(c.nome)}</h3>`;
+  h += `<div class="kpis"><div class="kpi"><b>${n0(bh.atual)}%</b><span>água disponível hoje</span></div><div class="kpi"><b style="color:${k < 0 ? 'var(--suave)' : CLS_AG[k].cor}">${k < 0 ? '—' : n2(bh.ksAtual)}</b><span>Ks hoje · ${cls.toLowerCase()}</span></div><div class="kpi"><b>${bh.campoAtual > 0 ? n1(bh.etcHoje) : '—'}</b><span>demanda (mm/dia)</span></div></div>`;
+  h += graficoAgua(bh);
+  const at = (a, dmd) => a == null ? '—' : `${a.toFixed(0)}% de ${dmd.toFixed(0)} mm`;
+  h += `<table><tr><td>Demanda hoje (ET0 ${n1(bh.et0Hoje)} × Kc ${n2(bh.kcAtual)})</td><td>${bh.campoAtual > 0 ? n1(bh.etcHoje) + ' mm/dia' : '—'}</td></tr>
+    <tr><td>Demanda atendida, últimos 30 dias</td><td>${at(bh.atend30, bh.dem30)}</td></tr><tr><td>Demanda atendida, próximos 15 dias</td><td>${at(bh.atendFut, bh.demFut)}</td></tr>
+    <tr><td>Pior Ks previsto (15 dias)</td><td>${bh.ksMinFutCampo == null ? '—' : n2(bh.ksMinFutCampo)}</td></tr></table>`;
+  h += `<div class="nota">Reservatório de ~${bh.TAW.toFixed(0)} mm (textura do solo${soloCultura(c.cid, cd) ? ' sob a cultura' : ''}, 60 cm). A faixa de estresse começa abaixo de ~${(100 * (1 - (bh.pAtual ?? kp.p))).toFixed(0)}% (p de ${esc(c.nome.toLowerCase())} = ${n2(kp.p)}, ajustado pela demanda do dia). Fita colorida: classe de Ks de cada dia. Passe o mouse no gráfico para ver os valores diários.</div>`;
+  return h + htmlAguaCulturas(f);
+}
+function htmlAguaCulturas(f) {   // compara todas as culturas da planilha com lavoura em campo no município
+  if (!PL || !CL) return '';
+  const cd = String(+f.properties.CD_MUN), mc = CL.mun[cd]; if (!mc) return '';
+  const linhas = [], safras = Object.keys(PL).sort().reverse();
+  for (const s of safras) for (const [n, c] of Object.entries(PL[s])) {
+    const m = c.mun[cd]; if (!m || linhas.some(l => l.n === n)) continue;
+    const bh = balancoHidrico(mc, cadMun(c.cid, cd), c, m, cd);
+    if (!(bh.campoAtual > 0) && bh.ksMinFutCampo == null) continue;
+    linhas.push({n, s, c, bh});
+  }
+  if (linhas.length < 2) return '';
+  const cel = ks => { const k = classeKs(ks); return ks == null ? '—' : `<span style="color:${CLS_AG[k].cor};font-weight:600">${n2(ks)}</span>`; };
+  return `<h3>Todas as culturas em campo</h3><table class="tab-ag"><tr><th>Cultura</th><th>Kc</th><th>Demanda<br>mm/dia</th><th>Água</th><th>Ks hoje</th><th>Pior Ks<br>15 dias</th></tr>${linhas.map(({n, s, bh}) => `<tr><td>${esc(n)}${safras.length > 1 ? ` <span class="nota" style="margin:0">${esc(s)}</span>` : ''}</td><td>${bh.campoAtual > 0 ? n2(bh.kcAtual) : '—'}</td><td>${bh.campoAtual > 0 ? n1(bh.etcHoje) : '—'}</td><td>${n0(bh.atual)}%</td><td>${bh.campoAtual > 0 ? cel(bh.ksAtual) : '—'}</td><td>${cel(bh.ksMinFutCampo)}</td></tr>`).join('')}</table>
+    <div class="nota">Mesma chuva e mesmo clima, mas cada cultura tem sua demanda (Kc da fase) e sua tolerância (p), e o solo considerado é o das áreas da cultura quando mapeadas. Por isso a situação pode diferir entre culturas no mesmo município.</div>`;
+}
 function htmlGeral(f) {
   const cd = String(+f.properties.CD_MUN), c = cultAtual(), m = c?.mun[cd]; let h = '';
   if (c) {
@@ -800,7 +913,8 @@ function htmlGeral(f) {
   const mc = CL?.mun[cd];
   if (mc) { const h0 = iHoje(), s = (i0, i1) => mc.p.slice(Math.max(0, i0), i1).reduce((t, x) => t + (x || 0), 0);
     h += `<h3>Clima</h3><div class="nota">Últimos 30 dias: ${s(h0 - 30, h0).toFixed(0)} mm (estimativa) · Próximos 15: ${s(h0, h0 + 15).toFixed(0)} mm (previsão) · ${diasSecos(mc)} dia${diasSecos(mc) === 1 ? '' : 's'} sem chuva</div>${graficoClima(mc)}`;
-    if (mc.tn.slice(h0, h0 + 15).some(t => t != null && t <= 3)) h += `<div style="color:var(--alerta);font-weight:600;font-size:12.5px">⚠ Previsão de mínima ≤ 3 °C: risco de geada</div>`; }
+    if (mc.tn.slice(h0, h0 + 15).some(t => t != null && t <= 3)) h += `<div style="color:var(--alerta);font-weight:600;font-size:12.5px">⚠ Previsão de mínima ≤ 3 °C: risco de geada</div>`;
+    if (c && m) h += htmlAgua(f, c, m, mc); }
   const so = soloDoMunicipio(f);
   if (so) { const tb = (o, cores) => Object.entries(o).filter(([, v]) => v >= .5).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td><i style="background:${cores[k] || '#bdbdbd'}"></i>${esc(k)}</td><td>${v.toFixed(0)}%</td></tr>`).join('');
     h += `<h3>Solos (escala 1:5.000.000)</h3><table>${tb(so.ordem, CORES_ORDEM)}</table><table style="margin-top:6px">${tb(so.textura, CORES_TEX)}</table><div class="nota">Água disponível estimada: ~${so.cad.toFixed(0)} mm em 60 cm (pela textura).</div>`; }
@@ -820,16 +934,22 @@ function balancoHidrico(mc, cad, c, m, cd) {
   let Dr = TAW * .5; const serie = [];
   for (let i = a; i < b; i++) {
     const data = deISO(CL.datas[i]);
-    let kc = KC_PALHADA; if (c && m) { const k = kcArea(c, m, data); if (k != null) kc = k; }
+    let kc = KC_PALHADA, campo = 0; if (c && m) { const k = kcInfo(c, m, data); if (k) { kc = k.kc; campo = k.campo; } }
     const et0 = (mc.et0[i] || 0) * fat.f, etc = et0 * kc, p = Math.min(.8, Math.max(.1, pTab + .04 * (5 - etc)));
     const raw = p * TAW, ks = Dr <= raw ? 1 : Math.max(0, (TAW - Dr) / ((1 - p) * TAW)), eta = ks * etc;
     Dr = Math.min(TAW, Math.max(0, Dr - (mc.p[i] || 0) + eta));
-    serie.push({i, kc, ks, p, pct: 100 * (TAW - Dr) / TAW, etc, eta, futuro: i >= h});
+    serie.push({i, kc, ks, p, pct: 100 * (TAW - Dr) / TAW, et0, etc, eta, chuva: mc.p[i] || 0, campo, futuro: i >= h});
   }
   const pass = serie.filter(s => !s.futuro && s.i >= h - 30), fut = serie.filter(s => s.futuro), ult = pass.at(-1);
+  const soma = (l, k) => l.reduce((t, s) => t + s[k], 0), pc = pass.filter(s => s.campo > 0), fc = fut.filter(s => s.campo > 0);
   return {atual: ult?.pct, ksAtual: ult?.ks, kcAtual: ult?.kc, pAtual: ult?.p, minFut: fut.length ? Math.min(...fut.map(s => s.pct)) : null,
     ksMinFut: fut.length ? Math.min(...fut.map(s => s.ks)) : null, diasEstresse: pass.filter(s => s.ks < 1).length, diasEstresseFut: fut.filter(s => s.ks < 1).length,
-    etc30: pass.reduce((t, s) => t + s.etc, 0), eta30: pass.reduce((t, s) => t + s.eta, 0), etcFut: fut.reduce((t, s) => t + s.etc, 0), fator: fat};
+    etc30: soma(pass, 'etc'), eta30: soma(pass, 'eta'), etcFut: soma(fut, 'etc'), fator: fat,
+    // só os dias com lavoura em campo (semeada e não colhida): base da camada "Água no solo"
+    serie, TAW, campoAtual: ult?.campo || 0, etcHoje: ult?.etc, et0Hoje: ult?.et0,
+    ksMinFutCampo: fc.length ? Math.min(...fc.map(s => s.ks)) : null,
+    atend30: soma(pc, 'etc') > 1 ? 100 * soma(pc, 'eta') / soma(pc, 'etc') : null, dem30: soma(pc, 'etc'),
+    atendFut: soma(fc, 'etc') > 1 ? 100 * soma(fc, 'eta') / soma(fc, 'etc') : null, demFut: soma(fc, 'etc')};
 }
 let VAL = null;   // validação da ET0 (estações INMET x modelo)
 function fatorET0(lon, lat, tipo = 'previsao') {
@@ -1059,6 +1179,7 @@ const METODOLOGIA = `
 <p><b>Validação e ajuste pelas estações INMET.</b> Para cada estação automática do INMET em MS, a rotina diária calcula a ET0 Penman-Monteith FAO-56 com os dados horários da própria estação: temperaturas máxima e mínima, umidades relativas máxima e mínima, vento médio convertido de 10 m para 2 m (fator 0,748) e radiação global medida, com o saldo de radiação calculado segundo o capítulo 3 da FAO-56. O cálculo foi conferido com o Exemplo 18 do Boletim 56 (3,9 mm/dia). Essa ET0 é comparada com a do modelo no mesmo ponto, separadamente para a reanálise ERA5 e para o modelo de previsão. São calculados número de dias, médias, viés (mm/dia e %), RMSE e correlação, exibidos no popup de cada estação. O fator de ajuste é a razão entre as médias (estação ÷ modelo). Ele só é usado com pelo menos 30 dias comparados, fica limitado entre 0,7 e 1,3 e é interpolado para cada município pelo inverso do quadrado da distância das estações a até 150 km. Quando não há estação válida, usa-se a ET0 do modelo sem ajuste.</p>
 <p><b>Coeficiente de cultura (Kc).</b> Os valores de referência são os da FAO-56 (tabela 12) para cada cultura (Kc inicial / médio / final): soja 0,40 / 1,15 / 0,50; milho 0,30 / 1,20 / 0,60; sorgo 0,30 / 1,05 / 0,55; amendoim 0,40 / 1,15 / 0,60; arroz 1,05 / 1,20 / 0,75; feijão 0,40 / 1,15 / 0,35; algodão 0,35 / 1,18 / 0,60; trigo 0,30 / 1,15 / 0,30; aveia 0,30 / 1,15 / 0,25. Podem ser substituídos pela equipe na aba Parâmetros da planilha. A curva de Kc segue os estádios da planilha: valor inicial até o segundo estádio, subida linear até o primeiro estádio crítico, valor médio até o fim das fases críticas e queda linear até a colheita. Na área colhida ou não semeada usa-se 0,30 (solo com palhada). Cada semana de semeadura é tratada como um grupo com sua própria idade, e o Kc do município é a média ponderada pela área semeada em cada semana.</p>
 <p><b>Balanço hídrico da zona radicular (FAO-56, capítulo 8).</b> O cálculo é diário, de 45 dias antes de hoje até 15 dias de previsão. A água total disponível (TAW) é estimada pela textura predominante para 60 cm de raízes (arenosa ~40 mm, média ~65 mm, argilosa ~90 mm). A água facilmente disponível é RAW = p·TAW, com p de cada cultura (tabela 22; soja 0,50, milho 0,55, feijão 0,45, algodão 0,65 etc.), ajustado pela demanda do dia (p + 0,04·(5 − ETc)). Quando a depleção ultrapassa a RAW, a evapotranspiração real é reduzida pelo coeficiente de estresse Ks = (TAW − Dr)/((1 − p)·TAW). A chuva entra integralmente, e o excedente acima da capacidade é perdido por drenagem. A depleção inicial é assumida em 50% da TAW, e os primeiros 15 dias servem de ajuste. Ks &lt; 1 indica restrição hídrica.</p>
+<p><b>Camada “Água no solo” e gráfico do município.</b> Para a cultura escolhida, cada município é classificado pelo balanço acima, com a demanda própria da cultura (ETc = ET0 × Kc da fase em que a área semeada está) e o seu limite de estresse (p). Modos: <i>Hoje</i> e <i>Pior dia (15 dias)</i> usam o Ks: atendida (Ks = 1), restrição leve (0,7 a 0,99), moderada (0,4 a 0,7) e severa (abaixo de 0,4). <i>Demanda atendida</i> é o consumo estimado (ETa) dividido pelo consumo potencial (ETc) nos dias com lavoura em campo: atendida (95% ou mais), leve (80 a 95%), moderada (60 a 80%) e severa (abaixo de 60%). Municípios sem área semeada ou já colhida no período aparecem em cinza. Os limites das classes são convenções do painel para leitura rápida, não limiares de perda de produtividade. O gráfico da ficha mostra a água no solo dia a dia (45 dias passados e 15 de previsão, em tracejado), a linha de início do estresse (1 − p), a chuva diária e uma fita com a classe de Ks de cada dia. Quando há mais de uma cultura em campo no município, a ficha compara Kc, demanda, água e Ks entre elas.</p>
 <h3>8. Fotos de campo</h3>
 <p>A cultura de cada foto é identificada pela subpasta (por exemplo “04_Fotos_Campo/Soja”). A posição é lida do GPS gravado na foto (EXIF). Quando a foto não tem GPS, como as enviadas pelo WhatsApp, o painel lê por reconhecimento de texto (OCR) o carimbo de data e coordenadas impresso na imagem pelo aplicativo de câmera. São tentados textos vermelhos, amarelos e brancos (no branco, exige-se contorno escuro), no rodapé e no topo da foto, com uma segunda leitura restrita a dígitos. Leituras com o separador decimal perdido são reparadas apenas quando o resultado cai dentro da faixa geográfica de MS (17°–24,3° S; 50,7°–58,4° O). Entre as datas lidas, vale a mais frequente. O município é obtido pela sobreposição do ponto com a malha municipal.</p>
 <h3>8a. Solos ocupados por cada cultura</h3>
@@ -1265,7 +1386,7 @@ $('busca').onchange = e => { const f = dadosMun?.features.find(x => norm(x.prope
   for (const c of Object.values(CAM)) if (c.on) { c.on = false; await ligar(c.id, true); }
   // camada invisível para cliques e dicas
   L.geoJSON(mun, {pane: 'clique', style: {stroke: false, fill: true, fillOpacity: 0}, onEachFeature: (f, l) => {
-    l.on('click', () => selecionar(f)); l.bindTooltip(f.properties.NM_MUN, {sticky: true, direction: 'top', opacity: .9}); }}).addTo(mapa);
+    l.on('click', () => selecionar(f)); l.bindTooltip(() => dicaMun(f), {sticky: true, direction: 'top', opacity: .9}); }}).addTo(mapa);
   mapa.fitBounds(L.geoJSON(mun).getBounds(), {padding: [10, 10]});
-  garantirClima(); pegar('dados/clima/estacoes_inmet.json').then(e => { EST = e; }); pegar('dados/clima/validacao_et0.json').then(v => { VAL = v; for (const k in _fat) delete _fat[k]; }); pegar('dados/solo_cultura.json').then(v => { SOLO_CULT = v; Object.keys(CAM).filter(k => k.startsWith('u_')).forEach(atualizarSub); });
+  garantirClima(); pegar('dados/clima/estacoes_inmet.json').then(e => { EST = e; }); pegar('dados/clima/validacao_et0.json').then(v => { VAL = v; for (const k in _fat) delete _fat[k]; atualizarAgua(); }); pegar('dados/solo_cultura.json').then(v => { SOLO_CULT = v; Object.keys(CAM).filter(k => k.startsWith('u_')).forEach(atualizarSub); atualizarAgua(); });
 })();
