@@ -32,6 +32,11 @@ log = []
 
 def ler(caminho: Path) -> gpd.GeoDataFrame:
     g = gpd.read_file(caminho)
+    # sem .cpg o texto pode vir em Latin-1 lido como UTF-8 ("Ã§"): relê com a codificação certa
+    txt = g.select_dtypes(include=["object", "string"]).astype(str)
+    if not caminho.with_suffix(".cpg").exists() and txt.apply(lambda c: c.str.contains("Ã|Â", regex=True)).any().any():
+        g = gpd.read_file(caminho, encoding="utf-8")
+        log.append(f"{caminho.name}: texto relido em UTF-8 (codificação declarada incorreta)")
     if g.crs is None:
         log.append(f"AVISO: {caminho.name} sem .prj; assumido {CRS_PADRAO}")
         g = g.set_crs(CRS_PADRAO)
@@ -157,6 +162,18 @@ for f in shps("uso_solo"):
     g = g.dissolve("classe", as_index=False, aggfunc={"area_ha": "sum"})
     g["area_ha"] = g["area_ha"].round(0)
     salvar(g, f"uso_{f.stem.lower()}", TOL_USO)
+
+
+# ------------------------------------------------------- infraestrutura (rodovias etc.)
+for f in shps("infraestrutura"):
+    g = ler(f)
+    g = g[g.intersects(area_ms.buffer(0.05))]
+    manter = [c for c in g.columns if c != "geometry" and c.upper() in ("NOME", "JURD", "COBE", "TIPO", "EXTENSA_KM")]
+    g = g[manter + ["geometry"]]
+    g.columns = [c.lower() if c != "geometry" else c for c in g.columns]
+    if "nome" in g.columns:
+        g["nome"] = g["nome"].astype(str).str.replace(r"\s+", " ", regex=True).str.strip()
+    salvar(g, f"infra_{f.stem.lower()}", 0.0005)
 
 # --------------------------------------------------------------- manifesto
 camadas = sorted(p.stem for p in SAI.glob("*.geojson"))

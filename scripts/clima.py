@@ -81,6 +81,92 @@ def open_meteo():
             out["datas"] = out["datas"] or d["time"]
             out["mun"][cd] = {k: [r1(v) for v in d.get(nome, [])] for k, nome in VARS.items()}
     salvar("modelo_municipios.json", out)
+    # dias já passados entram no histórico permanente (nunca é apagado)
+    hoje = AGORA.date().isoformat()
+    passado = {}
+    for cd, m in out["mun"].items():
+        for i, d in enumerate(out["datas"]):
+            if d < hoje:
+                passado.setdefault(d, {})[cd] = {k: m[k][i] for k in HIST_VARS if i < len(m.get(k, []))}
+    gravar_historico(passado, "modelo")
+    try:
+        completar_era5(pts)
+    except Exception as e:
+        print(f"ERA5 (reanálise): falhou ({e})", file=sys.stderr)
+
+
+# ------------------------------------------------------------- histórico permanente por ano
+# docs/dados/clima/historico/modelo_AAAA.json — um arquivo por ano, só acrescenta/atualiza dias.
+# Prioridade da fonte por dia: era5 (reanálise, mais consistente) > modelo (análise do modelo de previsão).
+HIST_VARS = ("p", "tx", "tn", "v", "et0")
+HIST = SAI / "historico"
+INICIO_HIST = "2025-07-01"          # início do histórico de clima por município (safra 2025/26)
+PRIOR = {"modelo": 1, "era5": 2}
+
+
+def ler_ano(ano):
+    f = HIST / f"modelo_{ano}.json"
+    if not f.exists():
+        return {"datas": [], "fonte": [], "mun": {}}
+    return json.loads(f.read_text(encoding="utf-8"))
+
+
+def gravar_historico(dias, fonte):
+    """dias = {data: {cd_mun: {var: valor}}}"""
+    HIST.mkdir(parents=True, exist_ok=True)
+    por_ano = {}
+    for d, v in dias.items():
+        por_ano.setdefault(d[:4], {})[d] = v
+    for ano, novos in por_ano.items():
+        h = ler_ano(ano)
+        idx = {d: i for i, d in enumerate(h["datas"])}
+        tab = {d: {"fonte": h["fonte"][i], "mun": {cd: {k: h["mun"][cd][k][i] for k in HIST_VARS} for cd in h["mun"]}}
+               for d, i in idx.items()}
+        n = 0
+        for d, mun in novos.items():
+            atual = tab.get(d)
+            if atual and PRIOR.get(atual["fonte"], 0) > PRIOR[fonte]:
+                continue                       # não troca reanálise por estimativa de modelo
+            tab[d] = {"fonte": fonte, "mun": {**(atual["mun"] if atual else {}), **mun}}; n += 1
+        datas = sorted(tab)
+        cds = sorted({cd for d in datas for cd in tab[d]["mun"]})
+        h = {"descricao": "Histórico diário por município (centróide). Não apagar: base das análises de safra.",
+             "unidades": {"p": "mm", "tx": "°C", "tn": "°C", "v": "km/h", "et0": "mm"},
+             "datas": datas, "fonte": [tab[d]["fonte"] for d in datas],
+             "mun": {cd: {k: [tab[d]["mun"].get(cd, {}).get(k) for d in datas] for k in HIST_VARS} for cd in cds}}
+        (HIST / f"modelo_{ano}.json").write_text(json.dumps(h, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        print(f"historico/modelo_{ano}.json: {len(datas)} dias ({n} atualizados, fonte {fonte})")
+
+
+def completar_era5(pts, max_dias=400):
+    """Preenche o histórico com a reanálise ERA5 (Open-Meteo Archive), que fica disponível com ~5 dias de atraso."""
+    fim = (AGORA - timedelta(days=6)).date()
+    ini = datetime.fromisoformat(INICIO_HIST).date()
+    tem = set()
+    for ano in range(ini.year, fim.year + 1):
+        h = ler_ano(ano)
+        tem |= {d for d, f in zip(h["datas"], h["fonte"]) if f == "era5"}
+    faltam = [d for d in (ini + timedelta(days=i) for i in range((fim - ini).days + 1)) if d.isoformat() not in tem]
+    if not faltam:
+        return
+    a, b = faltam[0], min(faltam[-1], faltam[0] + timedelta(days=max_dias))
+    dias = {}
+    nomes = {k: VARS[k] for k in HIST_VARS}
+    for i in range(0, len(pts), 40):
+        lote = pts[i:i + 40]
+        url = ("https://archive-api.open-meteo.com/v1/archive?"
+               f"latitude={','.join(str(p[1]) for p in lote)}&longitude={','.join(str(p[2]) for p in lote)}"
+               f"&start_date={a}&end_date={b}&daily={','.join(nomes.values())}&timezone=America%2FCampo_Grande")
+        resp = json.loads(baixar(url, 300))
+        if isinstance(resp, dict):
+            resp = [resp]
+        for (cd, _, _), r in zip(lote, resp):
+            dd = r["daily"]
+            for j, d in enumerate(dd["time"]):
+                vals = {k: r1(dd[n][j]) for k, n in nomes.items()}
+                if any(v is not None for v in vals.values()):
+                    dias.setdefault(d, {})[cd] = vals
+    gravar_historico(dias, "era5")
 
 
 # ------------------------------------------------------------------ 2. INMET
@@ -164,6 +250,17 @@ def inmet():
                 e["serie"].update(r["serie"])
     if not est:
         raise RuntimeError("nenhuma estação lida")
+    # histórico permanente por ano (acrescenta, nunca apaga)
+    HIST.mkdir(parents=True, exist_ok=True)
+    for ano in {d[:4] for e in est.values() for d in e["serie"]}:
+        f = HIST / f"inmet_{ano}.json"
+        h = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {"estacoes": {}}
+        for cod, e in est.items():
+            he = h["estacoes"].setdefault(cod, {k: e[k] for k in ("codigo", "nome", "lat", "lon", "alt")} | {"serie": {}})
+            he["serie"].update({d: v for d, v in e["serie"].items() if d[:4] == ano})
+            he["serie"] = dict(sorted(he["serie"].items()))
+        f.write_text(json.dumps(h, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        print(f"historico/inmet_{ano}.json: {len(h['estacoes'])} estações")
     limite = (AGORA - timedelta(days=150)).date().isoformat()
     for e in est.values():
         e["serie"] = {d: v for d, v in sorted(e["serie"].items()) if d >= limite}
