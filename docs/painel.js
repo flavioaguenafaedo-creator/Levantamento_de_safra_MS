@@ -356,7 +356,7 @@ function valorPl(c, m, j) {
 defCam('plantio', {grupo: 'lav', nome: 'Evolução da safra (planilha)', op: .85, desab: true, st: 'conecte a pasta',
   estilo: f => { const c = cultAtual(), m = c && c.mun[String(+f.properties.CD_MUN)]; if (!m) return {pane: 'plantio', fill: false, stroke: false};
     const v = valorPl(c, m, semSel), k = visPl === 'estadio' ? corEstadio(c, v) : corSeq(v, visPl === 'critico' ? ESC_CR : ESC_PL);
-    return k ? {pane: 'plantio', fillColor: k, fillOpacity: OPC('plantio'), weight: 0, stroke: false} : {pane: 'plantio', fill: false, stroke: false}; },
+    return k ? {pane: 'plantio', fill: true, fillColor: k, fillOpacity: OPC('plantio'), weight: 0, stroke: false} : {pane: 'plantio', fill: false, stroke: false}; },
   montar: async () => cultAtual() ? L.geoJSON(dadosMun, {interactive: false, style: CAM.plantio.estilo}) : null,
   sub: () => {
     const c = cultAtual(); if (!c) return '';
@@ -440,7 +440,7 @@ async function garantirClima() { CL = CL || await pegar('dados/clima/modelo_muni
 defCam('clima', {grupo: 'clima', nome: 'Clima por município', op: .8,
   estilo: f => { const m = CL?.mun[String(+f.properties.CD_MUN)], e = ESC_CL[clVar]; const v = m ? calcClima(m, clPer, clVar) : null;
     const k = v == null ? null : corSeq(100 * (v - e.min) / (maxEsc(e) - e.min), e.c);
-    return k ? {pane: 'clima', fillColor: k, fillOpacity: OPC('clima'), weight: 0, stroke: false} : {pane: 'clima', fill: false, stroke: false}; },
+    return k ? {pane: 'clima', fill: true, fillColor: k, fillOpacity: OPC('clima'), weight: 0, stroke: false} : {pane: 'clima', fill: false, stroke: false}; },
   montar: async () => { await garantirClima(); atualizarSub('clima'); return CL ? L.geoJSON(dadosMun, {interactive: false, style: CAM.clima.estilo}) : null; },
   sub: () => {
     const e = ESC_CL[clVar], mx = maxEsc(e);
@@ -483,7 +483,7 @@ defCam('agua', {grupo: 'clima', nome: 'Água no solo', op: .8, desab: true, st: 
   estilo: f => { const c = cultAtual(), cd = String(+f.properties.CD_MUN), B = bhCultura(c);
     if (!c || !B || !c.mun[cd]) return {pane: 'clima', fill: false, stroke: false};
     const k = classeAgua(B[cd]); if (k == null) return {pane: 'clima', fill: false, stroke: false};
-    return {pane: 'clima', fillColor: k < 0 ? COR_SEMCAMPO : CLS_AG[k].cor, fillOpacity: OPC('agua') * (k < 0 ? .6 : 1), weight: 0, stroke: false}; },
+    return {pane: 'clima', fill: true, fillColor: k < 0 ? COR_SEMCAMPO : CLS_AG[k].cor, fillOpacity: OPC('agua') * (k < 0 ? .6 : 1), weight: 0, stroke: false}; },
   montar: async () => { await garantirClima(); const c = cultAtual(); if (!c || !CL) { setSt('agua', !CL ? 'sem clima ainda' : 'escolha a cultura'); return null; }
     const L_ = L.geoJSON(dadosMun, {interactive: false, style: CAM.agua.estilo}); atualizarSub('agua'); return L_; },
   sub: () => {
