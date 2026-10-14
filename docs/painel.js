@@ -80,7 +80,11 @@ const fundos = {
   claro: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', {attribution: 'Mapa base © Esri', maxZoom: 16}),
   sat: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {attribution: 'Imagens © Esri', maxZoom: 18})
 };
-let fundoAtual = fundos.claro.addTo(mapa);
+fundos.osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '© OpenStreetMap', maxZoom: 18});
+let fundoAtual = fundos.claro.addTo(mapa), errosFundo = 0;
+// se o servidor da Esri falhar repetidamente, troca o fundo claro pelo OpenStreetMap
+fundos.claro.on('tileerror', () => { if (++errosFundo === 6 && fundoAtual === fundos.claro) { mapa.removeLayer(fundos.claro); fundoAtual = fundos.osm.addTo(mapa); } });
+fundos.claro.on('tileload', () => { errosFundo = 0; });
 [['solo', 340], ['uso', 360], ['clima', 380], ['plantio', 390], ['rod', 405], ['lim', 415], ['clique', 420], ['destaque', 430]]
   .forEach(([n, z]) => { mapa.createPane(n).style.zIndex = z; });
 mapa.getPane('destaque').style.pointerEvents = 'none';
@@ -612,13 +616,13 @@ defCam('fotos', {grupo: 'campo', nome: 'Fotos de campo', desab: true, st: 'conec
     const mk = L.marker([p.lat, p.lon], {opacity: OPC('fotos'), riseOnHover: true,
       icon: L.divIcon({className: '', html: `<div class="pin ${p.src === 'carimbo' ? 'carimbo' : ''}" style="background:${cult.cor}">${iconeCultura(cult.id)}</div>`, iconSize: [28, 28], iconAnchor: [14, 14], popupAnchor: [0, -12]})});
     mk.bindTooltip(`${esc(cult.nome)} · ${fmtD(p.data)} · ${p.mun ? esc(p.mun.properties.NM_MUN) : 'fora do MS'}`, {direction: 'top', offset: [0, -12]});
-    mk.on('click', () => {
+    mk.bindPopup(() => {
       const url = p.url || (p.url = URL.createObjectURL(p.f));
-      mk.bindPopup(`<div class="foto-pop"><img src="${url}" onclick="window.open('${url}')" title="Abrir em tamanho real" alt="">
+      return `<div class="foto-pop"><img src="${url}" onclick="window.open('${url}')" title="Abrir em tamanho real" alt="">
         <b>${esc(cult.nome)} · ${p.mun ? esc(p.mun.properties.NM_MUN) : 'Fora do MS'}</b><br>${p.dataArq ? 'Data do arquivo: ' + fmtDL(p.data) : p.data.toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: p.data.getHours() === 12 && !p.data.getMinutes() ? undefined : 'short'})}
         <br><span style="color:#5d6b58">${esc(p.a.caminho.split('/').pop())}<br>${p.lat.toFixed(5)}, ${p.lon.toFixed(5)} · posição ${p.src === 'gps' ? 'pelo GPS da foto' : 'lida do carimbo na imagem'}${p.cam ? ' · ' + esc(p.cam) : ''}</span>
-        <br><a href="${url}" target="_blank" rel="noopener">Abrir em tamanho real</a></div>`, {maxWidth: 300}).openPopup();
-    });
+        <br><a href="${url}" target="_blank" rel="noopener">Abrir em tamanho real</a></div>`;
+    }, {maxWidth: 300, autoPanPadding: [20, 20]});
     return mk;
   })),
   sub: () => {
@@ -1239,7 +1243,7 @@ async function gerarPDF(ini, fim, sel, opts) {
 // =====================================================================
 // INICIALIZAÇÃO
 // =====================================================================
-document.querySelectorAll('#fundo button').forEach(b => b.onclick = () => { document.querySelectorAll('#fundo button').forEach(x => x.classList.toggle('on', x === b)); mapa.removeLayer(fundoAtual); fundoAtual = fundos[b.dataset.f]; if (fundoAtual) fundoAtual.addTo(mapa); });
+document.querySelectorAll('#fundo button').forEach(b => b.onclick = () => { document.querySelectorAll('#fundo button').forEach(x => x.classList.toggle('on', x === b)); [fundos.claro, fundos.sat, fundos.osm].forEach(l => { if (mapa.hasLayer(l)) mapa.removeLayer(l); }); errosFundo = 0; fundoAtual = fundos[b.dataset.f] || null; if (fundoAtual) fundoAtual.addTo(mapa).bringToBack(); });
 $('menu').onclick = () => $('lado').classList.toggle('fechado');
 $('bt-estado').onclick = () => { $('busca').value = ''; mapa.fitBounds(L.geoJSON(dadosMun).getBounds(), {paddingBottomRight: [400, 0]}); selecionar(ESTADO); };
 $('busca').onchange = e => { const f = dadosMun?.features.find(x => norm(x.properties.NM_MUN) === norm(e.target.value)); if (f) { mapa.fitBounds(L.geoJSON(f).getBounds(), {paddingBottomRight: [400, 0]}); selecionar(f); } };
