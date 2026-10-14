@@ -1,0 +1,19 @@
+{
+  "atualizado_em": "2026-10-14T13:12:49+00:00",
+  "camadas": [
+    "limite_ms",
+    "municipios",
+    "solos",
+    "uso_cana_2025-26",
+    "uso_soja_2025-26"
+  ],
+  "log": [
+    "municipios: 79 feições, 790 KB",
+    "limite_ms: gerado a partir dos municípios",
+    "limite_ms: 1 feições, 75 KB",
+    "solos: 180 feições, 383 KB",
+    "solos: fonte Solos_5000.shp",
+    "uso_cana_2025-26: 1 feições, 892 KB",
+    "uso_soja_2025-26: 1 feições, 5,346 KB"
+  ]
+}
