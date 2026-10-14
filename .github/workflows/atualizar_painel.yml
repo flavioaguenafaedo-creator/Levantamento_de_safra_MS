@@ -30,8 +30,10 @@ jobs:
               base, ext = os.path.splitext(nome); ext = ext.lower(); b = base.lower()
               if nome in ("README.md", "requirements.txt", ".gitignore"):
                   return None
-              if nome == "index.html":
+              if nome in ("index.html", "painel.js", "painel.css"):
                   return "docs"
+              if b.startswith("logo"):
+                  return "docs/img"
               if nome in ("processar_camadas.py", "clima.py"):
                   return "scripts"
               if ext == ".geojson" or nome == "manifesto.json":
@@ -45,6 +47,8 @@ jobs:
               if ext in (".txt", ".md", ".docx"):
                   return "dados/entrada/relatos"
               if ext in SHP or b.endswith(".shp"):
+                  if "rodovia" in b or "ferrovia" in b or "armaz" in b:
+                      return "dados/entrada/infraestrutura"
                   if "munic" in b or "limite" in b:
                       return "dados/entrada/limites"
                   if "solo" in b and "soja" not in b:
