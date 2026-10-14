@@ -107,7 +107,7 @@ const PALETA_USO=["#e3b23c","#4f8a3c","#9ccf7f","#d4694a","#6d8fbf","#a37fbf","#
 
 const mapa=L.map('mapa',{zoomControl:true,preferCanvas:true}).setView([-20.6,-54.6],7);
 const fundos={
- claro:L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png',{attribution:'© OpenStreetMap · © CARTO',maxZoom:18}),
+  claro:L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',{attribution:'Mapa base © Esri',maxZoom:16}),
  sat:L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{attribution:'Imagens © Esri',maxZoom:18})
 };
 let fundoAtual=fundos.claro.addTo(mapa);
