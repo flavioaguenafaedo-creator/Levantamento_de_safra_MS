@@ -32,7 +32,7 @@ jobs:
                   return None
               if nome == "index.html":
                   return "docs"
-              if nome == "processar_camadas.py":
+              if nome in ("processar_camadas.py", "clima.py"):
                   return "scripts"
               if ext == ".geojson" or nome == "manifesto.json":
                   return "APAGAR"  # gerados automaticamente
@@ -63,6 +63,9 @@ jobs:
           EOF
       - run: pip install -r requirements.txt
       - run: python scripts/processar_camadas.py
+      - name: Clima (previsão e estações INMET)
+        run: python scripts/clima.py
+        continue-on-error: true
       - name: Publicar resultado
         run: |
           git config user.name "painel-bot"
