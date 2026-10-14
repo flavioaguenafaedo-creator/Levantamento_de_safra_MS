@@ -175,7 +175,7 @@ if SOLOS_MS is not None and USO_BRUTO:
     EQ = "ESRI:102033"
     unid = gpd.overlay(SOLOS_MS[["ordem", "textura", "geometry"]].to_crs(EQ),
                        municipios[["CD_MUN", "geometry"]].to_crs(EQ), how="intersection", keep_geom_type=True)
-    saida = {"descricao": "Área (ha) de cada cultura mapeada por classe e textura de solo. Solos: IBGE/Embrapa 1:5.000.000; uso: arquivos de dados/entrada/uso_solo.",
+    saida = {"descricao": "Área (ha) de cada cultura mapeada por classe e textura de solo. Solos: IBGE/Embrapa 1:5.000.000; uso: mapeamento Aprosoja-MS (dados/entrada/uso_solo).",
              "gerado": datetime.now(timezone.utc).isoformat(timespec="seconds"), "culturas": {}}
     for arq, g in USO_BRUTO:
         for cl in sorted(set(g["classe"]) & CULTURAS_USO):

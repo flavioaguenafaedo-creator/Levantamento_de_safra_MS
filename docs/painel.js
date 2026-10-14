@@ -199,7 +199,7 @@ function htmlSoloCultura(cd) {
   const tb = (o, cores) => Object.entries(o).filter(([, v]) => v >= .5).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td><i style="background:${cores[k] || '#bdbdbd'}"></i>${esc(k)}</td><td>${v.toFixed(0)}%</td></tr>`).join('');
   const blocos = Object.keys(SOLO_CULT.culturas).map(n => { const c = culturaDe(n); const r = soloCultura(c?.id, cd); if (!r) return '';
     return `<div class="nota" style="margin-top:8px;color:var(--tinta)"><b>${esc(n)}</b> · ${n0(r.area)} ha mapeados</div><table>${tb(r.textura, CORES_TEX)}</table><table style="margin-top:4px">${tb(r.ordem, CORES_ORDEM)}</table>`; }).join('');
-  return blocos ? `<h3>Solos ocupados pelas culturas mapeadas</h3>${blocos}<div class="nota">Cruzamento dos mapas de uso do solo com o mapa de solos 1:5.000.000 (% da área de cada cultura).</div>` : '';
+  return blocos ? `<h3>Solos ocupados pelas culturas mapeadas</h3>${blocos}<div class="nota">Cruzamento dos mapas de uso da Aprosoja-MS com o mapa de solos 1:5.000.000 (% da área de cada cultura).</div>` : '';
 }
 function soloDoMunicipio(f) {
   const cd = String(+f.properties.CD_MUN); if (SOLO_MUN[cd]) return SOLO_MUN[cd];
@@ -221,16 +221,30 @@ const CORES_USO = {"Soja": "#e0a526", "Cana-de-açúcar": "#3f9a5a", "Milho": "#
 const PALETA = ["#e3b23c", "#4f8a3c", "#9ccf7f", "#d4694a", "#6d8fbf", "#a37fbf", "#c4c4a0", "#3f6f6a"];
 function camUso(nome) {
   const id = 'u_' + nome, rot = nome.slice(4).replace(/_/g, ' ');
-  let classes = [];
-  const cor = c => CORES_USO[c] || PALETA[classes.indexOf(c) % PALETA.length];
+  let classes = null;
+  const cor = c => CORES_USO[c] || PALETA[(classes || []).indexOf(c) % PALETA.length];
   defCam(id, {grupo: 'uso', nome: rot.charAt(0).toUpperCase() + rot.slice(1), op: .85,
-    estilo: f => ({pane: 'uso', fillColor: cor(f.properties.classe), fillOpacity: OPC(id), weight: 0}),
+    estilo: f => ({pane: 'uso', fillColor: cor(f.properties.classe || ''), fillOpacity: OPC(id), weight: 0}),
     montar: async () => { const d = await pegar(`dados/${nome}.geojson`); if (!d) return null;
       classes = [...new Set(d.features.map(f => f.properties.classe))];
       CAM[id].legenda = d.features.map(f => `<div><i style="background:${cor(f.properties.classe)}"></i>${esc(f.properties.classe)}${f.properties.area_ha ? ' · ' + (f.properties.area_ha / 1e6).toLocaleString('pt-BR', {maximumFractionDigits: 2}) + ' mi ha' : ''}</div>`).join('');
       atualizarSub(id);
       return L.geoJSON(d, {style: CAM[id].estilo, interactive: false}); },
-    sub: () => `<div class="leg">${CAM[id].legenda || ''}</div>`});
+    sub: () => `<div class="leg">${CAM[id].legenda || ''}</div>${solosNaCamada(classes)}<div class="nota">Fonte: ${esc(fonteUso(nome))}.</div>`});
+}
+function fonteUso(nome) { return /soja|cana|ms26/i.test(nome) ? 'mapeamento de uso e cobertura da Aprosoja-MS' : 'mapeamento de uso e cobertura enviado à SEGEO-MS'; }
+function barraSolo(o, cores) {
+  const it = Object.entries(o).filter(([, v]) => v >= .5).sort((a, b) => b[1] - a[1]);
+  return `<div class="barra" style="height:12px">${it.map(([k, v]) => `<i title="${esc(k)}: ${v.toFixed(0)}%" style="width:${v}%;background:${cores[k] || '#bdbdbd'}"></i>`).join('')}</div>
+    <div class="leg" style="display:flex;flex-wrap:wrap;gap:0 10px">${it.slice(0, 4).map(([k, v]) => `<div><i style="background:${cores[k] || '#bdbdbd'}"></i>${esc(k)} ${v.toFixed(0)}%</div>`).join('')}</div>`;
+}
+function solosNaCamada(classes) {
+  if (!SOLO_CULT || !classes) return '';
+  return classes.map(cl => { const c = culturaDe(cl), r = c && soloCultura(c.id, null); if (!r) return '';
+    const cd = selecionado && selecionado !== ESTADO ? String(+selecionado.properties.CD_MUN) : null, rm = cd ? soloCultura(c.id, cd) : null;
+    return `<div style="margin-top:8px;font-size:12px"><b>Solos sob ${esc(cl.toLowerCase())}</b> · MS, ${n0(r.area)} ha</div>
+      <div class="nota" style="margin:2px 0 0">Textura</div>${barraSolo(r.textura, CORES_TEX)}<div class="nota" style="margin:2px 0 0">Classe</div>${barraSolo(r.ordem, CORES_ORDEM)}
+      ${rm ? `<div style="margin-top:6px;font-size:12px"><b>${esc(selecionado.properties.NM_MUN)}</b> · ${n0(rm.area)} ha</div>${barraSolo(rm.textura, CORES_TEX)}${barraSolo(rm.ordem, CORES_ORDEM)}` : '<div class="nota">Selecione um município para ver os solos sob a cultura nele.</div>'}`; }).join('');
 }
 
 // =====================================================================
@@ -732,6 +746,7 @@ function selecionar(f) {
   if (f === ESTADO) { camDestaque = null; abrirFicha(f); return; }
   camDestaque = L.geoJSON(f, {pane: 'destaque', interactive: false, style: {fill: false, color: getComputedStyle(document.documentElement).getPropertyValue('--acento2').trim() || '#b5882c', weight: 3}}).addTo(mapa);
   abrirFicha(f);
+  Object.keys(CAM).filter(k => k.startsWith('u_') && CAM[k].on).forEach(atualizarSub);
 }
 $('f-fechar').onclick = () => { $('ficha').hidden = true; selecionado = null; if (camDestaque) mapa.removeLayer(camDestaque); };
 document.querySelectorAll('.abas button').forEach(b => b.onclick = () => { abaFicha = b.dataset.a; document.querySelectorAll('.abas button').forEach(x => x.classList.toggle('on', x === b)); $('f-geral').hidden = abaFicha !== 'geral'; $('f-analise').hidden = abaFicha !== 'analise'; abrirFicha(selecionado, true); });
@@ -856,7 +871,7 @@ function gerarAnalise(f, soDados = false) {
     let t = `Predominam ${esc(ord[0].toLowerCase())}s (${ord[1].toFixed(0)}% da área) com textura ${esc(tex[0].toLowerCase())} (${tex[1].toFixed(0)}%), o que corresponde a uma água disponível estimada de ~${so.cad.toFixed(0)} mm na camada de 60 cm.`;
     if (so.cad < 55) t += ' Solos de menor retenção de água tornam a lavoura mais sensível a veranicos curtos.'; else if (so.cad > 80) t += ' Solos de maior retenção amortecem veranicos curtos, mas podem dificultar operações após chuvas intensas.';
     if (sc) { const tc = Object.entries(sc.textura).sort((a, b) => b[1] - a[1]), oc = Object.entries(sc.ordem).sort((a, b) => b[1] - a[1])[0];
-      t += ` Considerando só as áreas de ${esc(sc.nome.toLowerCase())} do mapa de uso (${n0(sc.area)} ha), ${tc.slice(0, 2).map(([k, v]) => `${v.toFixed(0)}% estão em solos de textura ${esc(k.toLowerCase())}`).join(' e ')}, e ${oc[1].toFixed(0)}% em ${esc(oc[0].toLowerCase())}s; a água disponível nessas áreas é estimada em ~${sc.cad.toFixed(0)} mm, valor usado no balanço hídrico.`; }
+      t += ` Considerando só as áreas de ${esc(sc.nome.toLowerCase())} do mapa de uso da Aprosoja-MS (${n0(sc.area)} ha), ${tc.slice(0, 2).map(([k, v]) => `${v.toFixed(0)}% estão em solos de textura ${esc(k.toLowerCase())}`).join(' e ')}, e ${oc[1].toFixed(0)}% em ${esc(oc[0].toLowerCase())}s; a água disponível nessas áreas é estimada em ~${sc.cad.toFixed(0)} mm, valor usado no balanço hídrico.`; }
     out.push(`<h4>Solo</h4><p>${t} <span class="nota">(Mapa 1:5.000.000: valor regional, não do talhão.)</span></p>`);
   }
   // 3. clima e balanço hídrico
@@ -973,7 +988,7 @@ function gerarAnaliseEstado() {
   // 2. solos da cultura
   const sc = soloCultura(cid, null);
   if (sc) { const tc = Object.entries(sc.textura).sort((a, b) => b[1] - a[1]), oc = Object.entries(sc.ordem).sort((a, b) => b[1] - a[1]);
-    out.push(`<h4>Solos ocupados pela cultura</h4><p>Pelo mapa de uso (${n0(sc.area)} ha de ${esc(sc.nome.toLowerCase())} mapeados), a área se distribui assim por textura do solo: ${tc.map(([k, v]) => `${v.toFixed(0)}% ${esc(k.toLowerCase())}`).join('; ')}. Por classe, predominam ${oc.slice(0, 3).map(([k, v]) => `${esc(k.toLowerCase())}s (${v.toFixed(0)}%)`).join(', ')}. ${(sc.textura['Arenosa'] || 0) >= 10 ? `A fração em solos arenosos (${sc.textura['Arenosa'].toFixed(0)}%) é a mais sensível a veranicos.` : 'A maior parte da área está em solos de média a alta retenção de água.'} <span class="nota">(Solos 1:5.000.000.)</span></p>`); }
+    out.push(`<h4>Solos ocupados pela cultura</h4><p>Pelo mapa de uso da Aprosoja-MS (${n0(sc.area)} ha de ${esc(sc.nome.toLowerCase())} mapeados), a área se distribui assim por textura do solo: ${tc.map(([k, v]) => `${v.toFixed(0)}% ${esc(k.toLowerCase())}`).join('; ')}. Por classe, predominam ${oc.slice(0, 3).map(([k, v]) => `${esc(k.toLowerCase())}s (${v.toFixed(0)}%)`).join(', ')}. ${(sc.textura['Arenosa'] || 0) >= 10 ? `A fração em solos arenosos (${sc.textura['Arenosa'].toFixed(0)}%) é a mais sensível a veranicos.` : 'A maior parte da área está em solos de média a alta retenção de água.'} <span class="nota">(Solos 1:5.000.000.)</span></p>`); }
   // 3. água no solo por município
   const linhas = []; let aR = 0, aRF = 0, aT = 0;
   if (CL) for (const [cd, m] of Object.entries(c.mun)) {
@@ -1019,7 +1034,7 @@ const METODOLOGIA = `
 <table><tr><th>Informação</th><th>Fonte</th><th>Atualização</th></tr>
 <tr><td>Limites municipais</td><td>IBGE, malha municipal 2025 (SIRGAS 2000)</td><td>Fixa</td></tr>
 <tr><td>Solos (classe e textura)</td><td>Mapa de Solos do Brasil, IBGE/Embrapa, escala 1:5.000.000</td><td>Fixa</td></tr>
-<tr><td>Uso e cobertura (soja, cana etc.)</td><td>Mapeamento vetorial de uso e cobertura (arquivo MS26S1UCS) fornecido à SEGEO-MS; cada classe é exibida como camada</td><td>Quando novos arquivos são enviados</td></tr>
+<tr><td>Uso e cobertura (soja, cana etc.)</td><td>Mapeamento vetorial de uso e cobertura de soja e cana-de-açúcar da Aprosoja-MS (arquivo MS26S1UCS), safra 2025/26; cada classe é exibida como camada</td><td>Quando novos arquivos são enviados</td></tr>
 <tr><td>Rodovias federais e estaduais</td><td>Base vetorial de rodovias de MS fornecida à SEGEO-MS (nome, jurisdição, revestimento, extensão)</td><td>Quando novos arquivos são enviados</td></tr>
 <tr><td>Evolução do plantio</td><td>Planilha semanal preenchida pelos técnicos da SEGEO-MS (% acumulado da área plantada por município)</td><td>Semanal, lida da pasta da equipe</td></tr>
 <tr><td>Previsão e estimativa diária por município</td><td>Open-Meteo (combinação de modelos ECMWF, GFS, ICON e outros), no ponto central de cada município</td><td>Diária (06h)</td></tr>
@@ -1043,7 +1058,7 @@ const METODOLOGIA = `
 <h3>8. Fotos de campo</h3>
 <p>A cultura de cada foto é identificada pela subpasta (por exemplo “04_Fotos_Campo/Soja”). A posição é lida do GPS gravado na foto (EXIF). Quando a foto não tem GPS, como as enviadas pelo WhatsApp, o painel lê por reconhecimento de texto (OCR) o carimbo de data e coordenadas impresso na imagem pelo aplicativo de câmera. São tentados textos vermelhos, amarelos e brancos (no branco, exige-se contorno escuro), no rodapé e no topo da foto, com uma segunda leitura restrita a dígitos. Leituras com o separador decimal perdido são reparadas apenas quando o resultado cai dentro da faixa geográfica de MS (17°–24,3° S; 50,7°–58,4° O). Entre as datas lidas, vale a mais frequente. O município é obtido pela sobreposição do ponto com a malha municipal.</p>
 <h3>8a. Solos ocupados por cada cultura</h3>
-<p>Para as culturas com mapa de uso e cobertura (atualmente soja, cana-de-açúcar e milho do arquivo MS26S1UCS), a rotina automática sobrepõe os polígonos da cultura ao mapa de solos e à malha municipal, em projeção de áreas iguais, e soma a área (ha) por classe e por textura de solo, em cada município e no estado. Esses percentuais aparecem na ficha, na análise e no resumo em PDF. Na análise, a água disponível usada no balanço hídrico passa a ser a das áreas ocupadas pela cultura, e não a do município inteiro. A escala do mapa de solos (1:5.000.000) limita a interpretação ao nível regional.</p>
+<p>Para as culturas com mapa de uso e cobertura (atualmente soja e cana-de-açúcar, do mapeamento da Aprosoja-MS), a rotina automática sobrepõe os polígonos da cultura ao mapa de solos e à malha municipal, em projeção de áreas iguais, e soma a área (ha) por classe e por textura de solo, em cada município e no estado. Esses percentuais aparecem na camada de uso (barras de textura e classe, no estado e no município selecionado), na ficha, na análise e no resumo em PDF. Na análise, a água disponível usada no balanço hídrico passa a ser a das áreas ocupadas pela cultura, e não a do município inteiro. A escala do mapa de solos (1:5.000.000) limita a interpretação ao nível regional.</p>
 <h3>8b. Visão do estado</h3>
 <p>A ficha do estado agrega os municípios com dados: médias ponderadas pela área informada, distribuição por estádio, calendário das fases críticas a partir da curva estadual de semeadura e indicadores por região imediata. O clima é a média diária dos municípios com a cultura, ponderada pela área. A análise estadual roda o balanço hídrico de cada município, informa a fração da área com restrição hídrica (Ks &lt; 1) hoje e na previsão, e ordena os municípios pela pontuação de prioridade de vistoria.</p>
 <h3>9. Relatos de viagem</h3>
@@ -1175,7 +1190,7 @@ async function gerarPDF(ini, fim, sel, opts) {
     const scP = soloCultura(cid, null);
     if (scP) { tabela(['Textura do solo (áreas de ' + scP.nome.toLowerCase() + ' mapeadas)', '% da área'], Object.entries(scP.textura).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, v.toFixed(1) + '%']), {tableWidth: 120});
       tabela(['Classe de solo', '% da área'], Object.entries(scP.ordem).sort((a, b) => b[1] - a[1]).filter(([, v]) => v >= .1).map(([k, v]) => [k, v.toFixed(1) + '%']), {tableWidth: 120});
-      par(`Cruzamento de ${n0(scP.area)} ha de ${scP.nome.toLowerCase()} do mapa de uso com o mapa de solos IBGE/Embrapa 1:5.000.000.`, 7.5, CINZA); }
+      par(`Cruzamento de ${n0(scP.area)} ha de ${scP.nome.toLowerCase()} do mapa de uso da Aprosoja-MS com o mapa de solos IBGE/Embrapa 1:5.000.000.`, 7.5, CINZA); }
     // regiões imediatas
     const reg = {}; for (const [cd, m] of Object.entries(c.mun)) { const r = MUN_IDX[cd]?.properties.NM_RGI || '—'; (reg[r] ??= []).push(m); }
     tabela(['Região imediata', 'Municípios', 'Área (ha)', '% plantado no início', '% plantado no fim', '% fase crítica no fim'], Object.entries(reg).sort().map(([r, ms]) => {
@@ -1248,5 +1263,5 @@ $('busca').onchange = e => { const f = dadosMun?.features.find(x => norm(x.prope
   L.geoJSON(mun, {pane: 'clique', style: {stroke: false, fill: true, fillOpacity: 0}, onEachFeature: (f, l) => {
     l.on('click', () => selecionar(f)); l.bindTooltip(f.properties.NM_MUN, {sticky: true, direction: 'top', opacity: .9}); }}).addTo(mapa);
   mapa.fitBounds(L.geoJSON(mun).getBounds(), {padding: [10, 10]});
-  garantirClima(); pegar('dados/clima/estacoes_inmet.json').then(e => { EST = e; }); pegar('dados/clima/validacao_et0.json').then(v => { VAL = v; for (const k in _fat) delete _fat[k]; }); pegar('dados/solo_cultura.json').then(v => { SOLO_CULT = v; });
+  garantirClima(); pegar('dados/clima/estacoes_inmet.json').then(e => { EST = e; }); pegar('dados/clima/validacao_et0.json').then(v => { VAL = v; for (const k in _fat) delete _fat[k]; }); pegar('dados/solo_cultura.json').then(v => { SOLO_CULT = v; Object.keys(CAM).filter(k => k.startsWith('u_')).forEach(atualizarSub); });
 })();
