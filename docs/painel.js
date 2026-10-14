@@ -606,7 +606,7 @@ async function* percorrer(dir, cam = '') { for await (const [n, h] of dir.entrie
 async function processarArquivos(lista, nomePasta) {
   arquivosPasta = lista;
   const st = $('st-pasta'), ext = a => a.caminho.toLowerCase().split('.').pop(), tmp = a => /(^|\/)~\$|(^|\/)\./.test(a.caminho);
-  const planilhas = lista.filter(a => ['xlsx', 'xls'].includes(ext(a)) && /plantio|evolu/i.test(norm(a.caminho)) && !tmp(a));
+  const planilhas = lista.filter(a => ['xlsx', 'xls'].includes(ext(a)) && /plantio|evolu/i.test(norm(a.caminho)) && !/modelo|template/i.test(norm(a.caminho.split('/').pop())) && !tmp(a));
   const fotos = lista.filter(a => ['jpg', 'jpeg', 'png', 'webp'].includes(ext(a)) && !tmp(a));
   const heic = lista.filter(a => ext(a) === 'heic').length;
   const relatos = lista.filter(a => ['docx', 'txt', 'md', 'pdf'].includes(ext(a)) && !tmp(a));
