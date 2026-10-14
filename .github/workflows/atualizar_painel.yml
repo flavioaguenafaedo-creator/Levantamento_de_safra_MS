@@ -2,9 +2,9 @@ name: Atualizar painel
 
 on:
   push:
-    paths:
-      - "dados/entrada/**"
-      - "scripts/**"
+    branches: [main]
+    paths-ignore:
+      - "docs/dados/**"
   workflow_dispatch:
   schedule:
     - cron: "0 10 * * *"
@@ -21,12 +21,52 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - name: Organizar arquivos enviados soltos na raiz
+        run: |
+          python - <<'EOF'
+          import os, shutil, glob
+          SHP = {".shp", ".shx", ".dbf", ".prj", ".cpg", ".qix", ".sbn", ".sbx", ".xml"}
+          def destino(nome):
+              base, ext = os.path.splitext(nome); ext = ext.lower(); b = base.lower()
+              if nome in ("README.md", "requirements.txt", ".gitignore"):
+                  return None
+              if nome == "index.html":
+                  return "docs"
+              if nome == "processar_camadas.py":
+                  return "scripts"
+              if ext == ".geojson" or nome == "manifesto.json":
+                  return "APAGAR"  # gerados automaticamente
+              if ext in (".xlsx", ".xls") and ("plantio" in b or "evolucao" in b):
+                  return "dados/entrada/plantio"
+              if ext in (".csv",):
+                  return "dados/entrada/clima_inmet"
+              if ext in (".jpg", ".jpeg", ".png", ".heic"):
+                  return "dados/entrada/fotos"
+              if ext in (".txt", ".md", ".docx"):
+                  return "dados/entrada/relatos"
+              if ext in SHP or b.endswith(".shp"):
+                  if "munic" in b or "limite" in b:
+                      return "dados/entrada/limites"
+                  if "solo" in b and "soja" not in b:
+                      return "dados/entrada/solos"
+                  return "dados/entrada/uso_solo"
+              return None
+          for f in sorted(os.listdir(".")):
+              if not os.path.isfile(f):
+                  continue
+              d = destino(f)
+              if d == "APAGAR":
+                  os.remove(f); print("removido (gerado):", f)
+              elif d:
+                  os.makedirs(d, exist_ok=True)
+                  shutil.move(f, os.path.join(d, f)); print("movido:", f, "->", d)
+          EOF
       - run: pip install -r requirements.txt
       - run: python scripts/processar_camadas.py
       - name: Publicar resultado
         run: |
           git config user.name "painel-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add docs/dados
-          git diff --cached --quiet || git commit -m "Atualiza camadas do painel [automático]"
+          git add -A
+          git diff --cached --quiet || git commit -m "Organiza arquivos e atualiza camadas do painel [automático]"
           git push
