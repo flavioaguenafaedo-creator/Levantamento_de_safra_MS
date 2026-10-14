@@ -1,0 +1,15 @@
+{
+  "atualizado_em": "2026-10-13T19:18:22+00:00",
+  "camadas": [
+    "limite_ms",
+    "municipios",
+    "solos"
+  ],
+  "log": [
+    "municipios: 79 feições, 790 KB",
+    "limite_ms: gerado a partir dos municípios",
+    "limite_ms: 1 feições, 75 KB",
+    "solos: 180 feições, 383 KB",
+    "solos: fonte Solos_5000.shp"
+  ]
+}
