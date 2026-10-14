@@ -169,6 +169,31 @@ def completar_era5(pts, max_dias=400):
     gravar_historico(dias, "era5")
 
 
+
+# ------------------------------------------------------------- ET0 Penman-Monteith (FAO-56, diária)
+import math
+
+
+def et0_pm(tmax, tmin, rhmax, rhmin, u2, rs, lat, z, doy):
+    """ET0 (mm/dia) pelo método FAO-56 Penman-Monteith. rs em MJ m-2 dia-1, u2 em m/s a 2 m, z em m."""
+    tm = (tmax + tmin) / 2
+    e0 = lambda t: 0.6108 * math.exp(17.27 * t / (t + 237.3))
+    es = (e0(tmax) + e0(tmin)) / 2
+    ea = (e0(tmin) * rhmax / 100 + e0(tmax) * rhmin / 100) / 2
+    delta = 4098 * e0(tm) / (tm + 237.3) ** 2
+    pres = 101.3 * ((293 - 0.0065 * z) / 293) ** 5.26
+    gama = 0.000665 * pres
+    phi = math.radians(lat)
+    dr = 1 + 0.033 * math.cos(2 * math.pi * doy / 365)
+    dec = 0.409 * math.sin(2 * math.pi * doy / 365 - 1.39)
+    ws = math.acos(max(-1, min(1, -math.tan(phi) * math.tan(dec))))
+    ra = 24 * 60 / math.pi * 0.0820 * dr * (ws * math.sin(phi) * math.sin(dec) + math.cos(phi) * math.cos(dec) * math.sin(ws))
+    rso = (0.75 + 2e-5 * z) * ra
+    rns = 0.77 * rs
+    rnl = 4.903e-9 * ((tmax + 273.16) ** 4 + (tmin + 273.16) ** 4) / 2 * (0.34 - 0.14 * math.sqrt(max(ea, 0))) * (1.35 * min(rs / rso, 1.0) - 0.35)
+    rn = rns - rnl
+    return (0.408 * delta * rn + gama * 900 / (tm + 273) * u2 * (es - ea)) / (delta + gama * (1 + 0.34 * u2))
+
 # ------------------------------------------------------------------ 2. INMET
 def num(s):
     s = (s or "").strip().replace(",", ".")
@@ -197,6 +222,7 @@ def ler_csv_inmet(texto):
         return None
     iP, iT, iTx, iTn, iV = (col("PRECIPITA"), col("BULBO SECO"), col("MÁXIMA NA HORA") or col("MAXIMA NA HORA"),
                             col("MÍNIMA NA HORA") or col("MINIMA NA HORA"), col("VENTO, VELOCIDADE"))
+    iUx, iUn, iRad = col("UMIDADE REL. MAX"), col("UMIDADE REL. MIN"), col("RADIACAO GLOBAL") or col("RADIAÇÃO GLOBAL")
     dias = {}
     for ln in linhas[cab_i + 1:]:
         c = ln.split(";")
@@ -214,20 +240,32 @@ def ler_csv_inmet(texto):
         # dia local (UTC-4): horas 00-03 UTC pertencem ao dia anterior
         if hora and int(hora) < 4:
             dt -= timedelta(days=1)
-        d = dias.setdefault(dt.date().isoformat(), {"p": [], "t": [], "tx": [], "tn": [], "v": []})
-        for k, i in (("p", iP), ("t", iT), ("tx", iTx), ("tn", iTn), ("v", iV)):
+        d = dias.setdefault(dt.date().isoformat(), {"p": [], "t": [], "tx": [], "tn": [], "v": [], "ux": [], "un": [], "rad": []})
+        for k, i in (("p", iP), ("t", iT), ("tx", iTx), ("tn", iTn), ("v", iV), ("ux", iUx), ("un", iUn), ("rad", iRad)):
             if i is not None and i < len(c):
                 v = num(c[i])
                 if v is not None:
                     d[k].append(v)
+    lat, alt = num(meta.get("LATITUDE")), num(meta.get("ALTITUDE")) or 0
     serie = {}
     for dia, d in sorted(dias.items()):
         if len(d["t"]) < 18:                                 # dia com menos de 18 h de dados: descartado
             continue
-        serie[dia] = {"p": r1(sum(d["p"])) if len(d["p"]) >= 18 else None,
-                      "tx": r1(max(d["tx"] or d["t"])), "tn": r1(min(d["tn"] or d["t"])),
-                      "tm": r1(sum(d["t"]) / len(d["t"])),
-                      "v": r1(3.6 * sum(d["v"]) / len(d["v"])) if d["v"] else None}
+        tx, tn = max(d["tx"] or d["t"]), min(d["tn"] or d["t"])
+        reg = {"p": r1(sum(d["p"])) if len(d["p"]) >= 18 else None, "tx": r1(tx), "tn": r1(tn),
+               "tm": r1(sum(d["t"]) / len(d["t"])),
+               "v": r1(3.6 * sum(d["v"]) / len(d["v"])) if d["v"] else None}
+        # ET0 FAO-56 só com dia completo: umidade, vento (10 m -> 2 m) e radiação global (kJ/m² por hora)
+        rad = [x for x in d["rad"] if x > 0]
+        if lat is not None and len(d["ux"]) >= 18 and len(d["un"]) >= 18 and len(d["v"]) >= 18 and len(rad) >= 8:
+            rs = sum(rad) / 1000                            # kJ/m² -> MJ/m² por dia
+            u2 = (sum(d["v"]) / len(d["v"])) * 4.87 / math.log(67.8 * 10 - 5.42)
+            doy = datetime.fromisoformat(dia).timetuple().tm_yday
+            try:
+                reg["et0"] = r1(et0_pm(tx, tn, max(d["ux"]), min(d["un"]), u2, rs, lat, alt, doy))
+            except (ValueError, ZeroDivisionError):
+                pass
+        serie[dia] = reg
     return {"codigo": meta.get("CODIGO (WMO)", ""), "nome": meta.get("ESTACAO", "").title(),
             "lat": num(meta.get("LATITUDE")), "lon": num(meta.get("LONGITUDE")), "alt": num(meta.get("ALTITUDE")),
             "serie": serie}
@@ -261,6 +299,10 @@ def inmet():
             he["serie"] = dict(sorted(he["serie"].items()))
         f.write_text(json.dumps(h, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
         print(f"historico/inmet_{ano}.json: {len(h['estacoes'])} estações")
+    try:
+        validar_et0(est)
+    except Exception as e:
+        print(f"validação ET0: falhou ({e})", file=sys.stderr)
     limite = (AGORA - timedelta(days=150)).date().isoformat()
     for e in est.values():
         e["serie"] = {d: v for d, v in sorted(e["serie"].items()) if d >= limite}
@@ -268,6 +310,54 @@ def inmet():
     salvar("estacoes_inmet.json", {"fonte": "INMET · estações automáticas · dados históricos anuais",
                                    "gerado": AGORA.isoformat(timespec="minutes"),
                                    "estacoes": [e for e in est.values() if e["serie"]]})
+
+
+# ------------------------------------------------------------- validação da ET0 do modelo com as estações
+def _stats(pares):
+    n = len(pares)
+    if n < 2:
+        return None
+    a = [x for x, _ in pares]; b = [y for _, y in pares]
+    ma, mb = sum(a) / n, sum(b) / n
+    sa = math.sqrt(sum((x - ma) ** 2 for x in a)); sb = math.sqrt(sum((y - mb) ** 2 for y in b))
+    r = sum((x - ma) * (y - mb) for x, y in pares) / (sa * sb) if sa and sb else None
+    rmse = math.sqrt(sum((y - x) ** 2 for x, y in pares) / n)
+    return {"n": n, "inmet": round(ma, 2), "modelo": round(mb, 2), "vies_mm": round(mb - ma, 2),
+            "vies_pct": round(100 * (mb - ma) / ma, 1) if ma else None, "rmse": round(rmse, 2), "r": round(r, 2) if r is not None else None,
+            "fator": round(min(1.3, max(0.7, ma / mb)), 3) if mb and n >= 30 else None}
+
+
+def validar_et0(est):
+    """Compara a ET0 Penman-Monteith das estações com a ET0 do modelo no mesmo ponto:
+    (a) reanálise ERA5 (base do histórico) e (b) modelo de previsão (base do balanço hídrico recente)."""
+    pts = [(cod, e["lat"], e["lon"]) for cod, e in est.items() if e.get("lat") and any("et0" in v for v in e["serie"].values())]
+    if not pts:
+        print("validação ET0: nenhuma estação com ET0 calculável"); return
+    dias_et0 = sorted({d for cod, _, _ in pts for d, v in est[cod]["serie"].items() if "et0" in v})
+    fim = min(dias_et0[-1], (AGORA - timedelta(days=6)).date().isoformat())
+    ini = max(dias_et0[0], (AGORA - timedelta(days=365)).date().isoformat())
+    modelo = {"era5": {}, "previsao": {}}
+    for i in range(0, len(pts), 40):
+        lote = pts[i:i + 40]
+        lat = ",".join(str(p[1]) for p in lote); lon = ",".join(str(p[2]) for p in lote)
+        for tipo, url in (("era5", f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={ini}&end_date={fim}&daily=et0_fao_evapotranspiration&timezone=America%2FCampo_Grande"),
+                          ("previsao", f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=et0_fao_evapotranspiration&past_days=92&forecast_days=1&timezone=America%2FCampo_Grande")):
+            try:
+                resp = json.loads(baixar(url, 300))
+            except Exception as e:
+                print(f"validação ET0 ({tipo}): falhou ({e})", file=sys.stderr); continue
+            resp = [resp] if isinstance(resp, dict) else resp
+            for (cod, _, _), r in zip(lote, resp):
+                modelo[tipo][cod] = dict(zip(r["daily"]["time"], r["daily"]["et0_fao_evapotranspiration"]))
+    saida = []
+    for cod, la, lo in pts:
+        e = est[cod]; reg = {"codigo": cod, "nome": e["nome"], "lat": la, "lon": lo}
+        for tipo in ("era5", "previsao"):
+            m = modelo[tipo].get(cod, {})
+            reg[tipo] = _stats([(v["et0"], m[d]) for d, v in e["serie"].items() if "et0" in v and m.get(d) is not None])
+        saida.append(reg)
+    salvar("validacao_et0.json", {"descricao": "ET0 FAO-56 Penman-Monteith calculada com dados horários das estações INMET (MS) comparada com a ET0 do modelo no ponto da estação. fator = média INMET / média modelo (aplicado só com n >= 30 dias; limitado a 0,7–1,3).",
+                                  "gerado": AGORA.isoformat(timespec="minutes"), "periodo": [ini, fim], "estacoes": saida})
 
 
 if __name__ == "__main__":

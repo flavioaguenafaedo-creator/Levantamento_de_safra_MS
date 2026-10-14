@@ -233,7 +233,8 @@ function lerPlanilha(buf) {
   for (let r = 3; r < rows.length; r++) {
     const x = rows[r] || [];
     if (x[0] && x[2] != null && typeof x[3] === 'number') (C[x[0]] ??= {estadios: []}).estadios.push({nome: String(x[2]), dias: x[3], critico: norm(x[4]) === 'sim', obs: x[5] || ''});
-    if (x[8] && x[9] != null) { const d = x[9] instanceof Date ? x[9] : new Date(Math.round((x[9] - 25569) * 864e5)); d.setHours(12, 0, 0, 0); (C[x[8]] ??= {estadios: []}).inicio = d; }
+    if (x[8] && x[9] != null) { const d = x[9] instanceof Date ? x[9] : new Date(Math.round((x[9] - 25569) * 864e5)); d.setHours(12, 0, 0, 0); (C[x[8]] ??= {estadios: []}).inicio = d;
+      const nums = [x[11], x[12], x[13], x[14]]; if (nums.slice(0, 3).every(v => typeof v === 'number')) C[x[8]].kcPlan = {ini: x[11], mid: x[12], fim: x[13], p: typeof x[14] === 'number' ? x[14] : undefined}; }
   }
   for (const nome in C) {
     const ws = wb.Sheets[nome]; C[nome].mun = {}; C[nome].nome = nome; C[nome].cid = (culturaDe(nome) || OUTRA).id;
@@ -261,10 +262,36 @@ function mediaMS(c, fn) {   // média ponderada pela área (municípios com áre
   for (const m of Object.values(c.mun)) { const v = fn(m); if (v == null) continue; n++; ss += v; if (m.area) { sa += m.area; sv += v * m.area; } }
   return sa ? {v: sv / sa, pond: true, n, area: sa} : n ? {v: ss / n, pond: false, n, area: 0} : null;
 }
-function kcEstadio(c, i) {
-  const E = c.estadios, crit = E.map((e, k) => e.critico ? k : -1).filter(k => k >= 0), a = crit[0] ?? E.length, b = crit.at(-1) ?? E.length;
-  if (i === 0) return .4; if (i === E.length - 1) return .3; if (E[i].critico) return 1.1; if (i < a) return .75;
-  return /matura/i.test(norm(E[i].nome)) ? .5 : .75;
+// Kc da FAO-56 (Allen et al., 1998; Boletim 56, tabela 12) e fração de esgotamento p (tabela 22), por cultura.
+// A planilha pode sobrescrever: aba Parâmetros, colunas L–O da tabela de datas (Kc inicial, Kc médio, Kc final, p).
+const KC_FAO = {soja: [.40, 1.15, .50, .50], milho1: [.30, 1.20, .60, .55], milho2: [.30, 1.20, .60, .55], sorgo: [.30, 1.05, .55, .55],
+  amendoim: [.40, 1.15, .60, .50], arroz: [1.05, 1.20, .75, .20], feijao1: [.40, 1.15, .35, .45], feijao2: [.40, 1.15, .35, .45],
+  algodao: [.35, 1.18, .60, .65], trigo: [.30, 1.15, .30, .55], aveia: [.30, 1.15, .25, .55], cana: [.40, 1.25, .75, .65]};
+const KC_PALHADA = .30;   // área colhida ou não semeada (solo com palhada)
+function paramsKc(c) { const t = KC_FAO[c.cid] || [.4, 1.1, .5, .5]; const o = c.kcPlan || {};
+  return {ini: o.ini ?? t[0], mid: o.mid ?? t[1], fim: o.fim ?? t[2], p: o.p ?? t[3], fonte: c.kcPlan ? 'planilha' : 'FAO-56'}; }
+// curva de Kc por dias após a semeadura, ancorada nos estádios da planilha:
+// inicial até o 2º estádio; sobe até o 1º estádio crítico; médio até o fim das fases críticas; desce até a colheita.
+function kcCurva(c, das) {
+  const E = c.estadios, k = paramsKc(c); if (das < 0) return null;
+  const ic = E.findIndex(e => e.critico), lc = E.map(e => e.critico).lastIndexOf(true);
+  const D1 = E[1]?.dias ?? 10, Dc = ic >= 0 ? E[ic].dias : (E[Math.floor(E.length / 2)]?.dias ?? 50);
+  const Dpc = lc >= 0 && E[lc + 1] ? E[lc + 1].dias : Dc + 30, Dh = E.at(-1).dias;
+  if (das < D1) return k.ini;
+  if (das < Dc) return k.ini + (k.mid - k.ini) * (das - D1) / Math.max(1, Dc - D1);
+  if (das < Dpc) return k.mid;
+  if (das < Dh) return k.mid + (k.fim - k.mid) * (das - Dpc) / Math.max(1, Dh - Dpc);
+  return KC_PALHADA;
+}
+// Kc médio da área semeada numa data: cada semana de semeadura é uma coorte com sua idade
+function kcArea(c, m, data) {
+  let soma = 0, peso = 0, ant = 0;
+  for (let w = 1; w <= m.serie.length; w++) {
+    const ac = acum(m.serie, w), inc = ac - ant; ant = ac; if (inc <= 0) continue;
+    const das = (data - addD(dataSem(c, w), -3.5)) / 864e5; if (das < 0) continue;
+    soma += inc * kcCurva(c, das); peso += inc;
+  }
+  return peso >= 1 ? soma / peso : null;
 }
 function corEstadio(c, i) {
   const E = c?.estadios; if (!E || i == null || i < 0) return null;
@@ -391,6 +418,11 @@ function graficoEst(e) {
   const ds = Object.keys(e.serie).slice(-30); if (!ds.length) return ''; const W = 280, H = 70, bw = W / ds.length, pm = Math.max(10, ...ds.map(d => e.serie[d].p || 0));
   return `<svg class="graf" viewBox="0 0 ${W} ${H + 14}" width="100%" font-size="10">${ds.map((d, i) => { const p = e.serie[d].p || 0, h = H * p / pm; return `<rect x="${i * bw + 1}" y="${H - h}" width="${bw - 2}" height="${h}" fill="#2171b5"><title>${d}: ${p} mm</title></rect>`; }).join('')}<line x1="0" x2="${W}" y1="${H}" y2="${H}" stroke="#ccc"/><text x="0" y="${H + 12}">${fmtD(deISO(ds[0]))}</text><text x="${W}" y="${H + 12}" text-anchor="end">${fmtD(deISO(ds.at(-1)))}</text></svg>`;
 }
+function valEst(cod) {
+  const v = VAL?.estacoes.find(x => x.codigo === cod); if (!v) return '';
+  const l = (t, x) => x ? `<br>${t}: ET0 estação ${n1(x.inmet)} × modelo ${n1(x.modelo)} mm/dia (${x.vies_pct > 0 ? '+' : ''}${n1(x.vies_pct)}%, ${x.n} dias${x.r != null ? ', r = ' + n1(x.r) : ''})` : '';
+  return `<div style="margin-top:4px;font-size:12px">Validação da ET0 (Penman-Monteith):${l('Reanálise ERA5', v.era5)}${l('Modelo de previsão', v.previsao)}</div>`;
+}
 defCam('est', {grupo: 'clima', nome: 'Estações INMET',
   montar: async () => {
     EST = EST || await pegar('dados/clima/estacoes_inmet.json');
@@ -400,7 +432,7 @@ defCam('est', {grupo: 'clima', nome: 'Estações INMET',
     return L.layerGroup(EST.estacoes.filter(e => e.lat && e.lon).map(e => {
       const ds = Object.keys(e.serie), soma = l => l.reduce((t, d) => t + (e.serie[d].p ?? 0), 0).toFixed(0);
       return L.circleMarker([e.lat, e.lon], {radius: 6, color: '#fff', weight: 1.5, fillColor: '#1f4e79', fillOpacity: OPC('est'), opacity: OPC('est')})
-        .bindPopup(`<b>${esc(e.nome)}</b> · ${esc(e.codigo)}<br>Último dia com dados: ${e.ultimo_dia ? fmtD(deISO(e.ultimo_dia)) : '—'}<br>Chuva, 7 últimos dias com dados: <b>${soma(ds.slice(-7))} mm</b><br>Chuva, 30 últimos dias com dados: <b>${soma(ds.slice(-30))} mm</b>${graficoEst(e)}`, {maxWidth: 320});
+        .bindPopup(`<b>${esc(e.nome)}</b> · ${esc(e.codigo)}<br>Último dia com dados: ${e.ultimo_dia ? fmtD(deISO(e.ultimo_dia)) : '—'}<br>Chuva, 7 últimos dias com dados: <b>${soma(ds.slice(-7))} mm</b><br>Chuva, 30 últimos dias com dados: <b>${soma(ds.slice(-30))} mm</b>${valEst(e.codigo)}${graficoEst(e)}`, {maxWidth: 320});
     }));
   },
   sub: () => '<div class="nota">O INMET publica o arquivo anual com algumas semanas de atraso.</div>'});
@@ -672,21 +704,33 @@ function calendarioCritico(c, m) {
   const tot = acum(m.serie, 99);
   return c.estadios.filter(e => e.critico).map(e => { for (let j = 1; j <= 70; j++) if (tot && acum(m.serie, j - Math.round(e.dias / 7)) >= tot / 2) return [e.nome, dataSem(c, j)]; return [e.nome, null]; });
 }
-// balanço hídrico sequencial simplificado (Thornthwaite-Mather) com Kc ponderado pelos estádios da área semeada
-function balancoHidrico(mc, cad, c, m) {
-  const h = iHoje(), a = Math.max(0, h - 45), b = Math.min(CL.datas.length, h + 15);
-  let arm = cad * .5; const serie = [];
+// balanço hídrico diário da zona radicular (FAO-56, cap. 8): depleção Dr, RAW = p·TAW, Ks = (TAW − Dr)/((1 − p)·TAW)
+function balancoHidrico(mc, cad, c, m, cd) {
+  const h = iHoje(), a = Math.max(0, h - 45), b = Math.min(CL.datas.length, h + 15), TAW = cad;
+  const ct = centroMun(cd), fat = ct ? fatorET0(ct[0], ct[1], 'previsao') : {f: 1, base: []}, pTab = c ? paramsKc(c).p : .5;
+  let Dr = TAW * .5; const serie = [];
   for (let i = a; i < b; i++) {
-    let kc = .3;
-    if (c && m) { const j = semanaDe(c, deISO(CL.datas[i])), d = distrib(c, m, j), pl = d.reduce((t, v) => t + v, 0); if (pl >= 1) kc = d.reduce((t, v, k) => t + v * kcEstadio(c, k), 0) / pl; }
-    const etc = (mc.et0[i] || 0) * kc, p = mc.p[i] || 0;
-    arm = p >= etc ? Math.min(cad, arm + p - etc) : arm * Math.exp(-(etc - p) / cad);
-    serie.push({i, arm, pct: 100 * arm / cad, etc, p, futuro: i >= h});
+    const data = deISO(CL.datas[i]);
+    let kc = KC_PALHADA; if (c && m) { const k = kcArea(c, m, data); if (k != null) kc = k; }
+    const et0 = (mc.et0[i] || 0) * fat.f, etc = et0 * kc, p = Math.min(.8, Math.max(.1, pTab + .04 * (5 - etc)));
+    const raw = p * TAW, ks = Dr <= raw ? 1 : Math.max(0, (TAW - Dr) / ((1 - p) * TAW)), eta = ks * etc;
+    Dr = Math.min(TAW, Math.max(0, Dr - (mc.p[i] || 0) + eta));
+    serie.push({i, kc, ks, p, pct: 100 * (TAW - Dr) / TAW, etc, eta, futuro: i >= h});
   }
-  const pass = serie.filter(s => !s.futuro && s.i >= h - 30), fut = serie.filter(s => s.futuro);
-  return {atual: pass.at(-1)?.pct, minFut: fut.length ? Math.min(...fut.map(s => s.pct)) : null, diasEstresse: pass.filter(s => s.pct < 40).length,
-    diasEstresseFut: fut.filter(s => s.pct < 40).length, etc30: pass.reduce((t, s) => t + s.etc, 0), etcFut: fut.reduce((t, s) => t + s.etc, 0)};
+  const pass = serie.filter(s => !s.futuro && s.i >= h - 30), fut = serie.filter(s => s.futuro), ult = pass.at(-1);
+  return {atual: ult?.pct, ksAtual: ult?.ks, kcAtual: ult?.kc, pAtual: ult?.p, minFut: fut.length ? Math.min(...fut.map(s => s.pct)) : null,
+    ksMinFut: fut.length ? Math.min(...fut.map(s => s.ks)) : null, diasEstresse: pass.filter(s => s.ks < 1).length, diasEstresseFut: fut.filter(s => s.ks < 1).length,
+    etc30: pass.reduce((t, s) => t + s.etc, 0), eta30: pass.reduce((t, s) => t + s.eta, 0), etcFut: fut.reduce((t, s) => t + s.etc, 0), fator: fat};
 }
+let VAL = null;   // validação da ET0 (estações INMET x modelo)
+function fatorET0(lon, lat, tipo = 'previsao') {
+  if (!VAL) return {f: 1, base: []};
+  let sw = 0, sf = 0; const base = [];
+  for (const e of VAL.estacoes) { const v = e[tipo]; if (!v || !v.fator) continue; const d = turf.distance([lon, lat], [e.lon, e.lat]); if (d > 150) continue;
+    const w = 1 / Math.max(5, d) ** 2; sw += w; sf += w * v.fator; base.push({nome: e.nome, d, ...v}); }
+  return sw ? {f: sf / sw, base: base.sort((a, b) => a.d - b.d)} : {f: 1, base: []};
+}
+const centroMun = cd => { const f = MUN_IDX[cd]; if (!f) return null; f._ct = f._ct || turf.centroid(f).geometry.coordinates; return f._ct; };
 function estacaoProxima(lat, lon) {
   if (!EST) return null; let melhor = null;
   for (const e of EST.estacoes) { if (!e.lat) continue; const d = turf.distance([lon, lat], [e.lon, e.lat]); if (d < 70 && (!melhor || d < melhor.d)) melhor = {e, d}; }
@@ -728,18 +772,21 @@ function gerarAnalise(f) {
     const p30 = soma('p', h - 30, h), p15 = soma('p', h, h + 15), et30 = soma('et0', h - 30, h), et15 = soma('et0', h, h + 15), seco = diasSecos(mc);
     const tx15 = mc.tx.slice(h, h + 15), tn15 = mc.tn.slice(h, h + 15), quente = tx15.filter(t => t >= 35).length, geada = tn15.filter(t => t != null && t <= 3).length;
     let t = `Nos últimos 30 dias, o modelo estima <b>${p30.toFixed(0)} mm</b> de chuva para uma evapotranspiração de referência de ${et30.toFixed(0)} mm${seco >= 1 ? `, com ${seco} dia${seco > 1 ? 's' : ''} seguido${seco > 1 ? 's' : ''} sem chuva até hoje` : ''}.`;
-    const bh = balancoHidrico(mc, so?.cad || 60, c, m);
+    const bh = balancoHidrico(mc, so?.cad || 60, c, m, cd), kp = c ? paramsKc(c) : null;
+    if (bh.fator.base.length && Math.abs(bh.fator.f - 1) >= .03)
+      t += ` A ET0 do modelo foi ajustada por um fator de ${bh.fator.f.toFixed(2).replace('.', ',')}, obtido da comparação com a ET0 Penman-Monteith calculada nas estações INMET próximas (o modelo ficou ${bh.fator.base.slice(0, 2).map(b => n1(Math.abs(b.vies_pct)) + '% ' + (b.vies_pct > 0 ? 'acima' : 'abaixo') + ' em ' + esc(b.nome)).join(' e ')}).`;
     if (bh.atual != null) {
-      t += ` O balanço hídrico simplificado (solo com ~${(so?.cad || 60).toFixed(0)} mm e coeficiente de cultura pelos estádios) indica armazenamento atual de <b>${bh.atual.toFixed(0)}%</b> da água disponível`;
-      t += bh.diasEstresse ? `, com ${bh.diasEstresse} dias abaixo de 40% no último mês.` : '.';
-      if (bh.atual < 40) { pontos += 2; atencao.push(`Armazenamento de água no solo baixo (${bh.atual.toFixed(0)}%)${m && dCrit ? ', com fases críticas se aproximando' : ''}.`); }
+      t += ` O balanço hídrico da zona radicular (FAO-56; água disponível ~${(so?.cad || 60).toFixed(0)} mm pela textura${kp ? `; Kc de ${esc(c.nome.toLowerCase())} ${kp.fonte === 'FAO-56' ? 'da FAO-56' : 'da planilha'}, hoje ~${n1(bh.kcAtual)} na área semeada; p = ${n1(bh.pAtual)}` : ''}) indica <b>${bh.atual.toFixed(0)}%</b> da água disponível no solo`;
+      t += bh.ksAtual < 1 ? `, já abaixo do limite de fácil absorção: há <b>restrição hídrica</b> (Ks = ${bh.ksAtual.toFixed(2).replace('.', ',')}; a planta transpira ~${(100 * bh.ksAtual).toFixed(0)}% do potencial)` : ', sem restrição hídrica (Ks = 1)';
+      t += bh.diasEstresse ? `. Nos últimos 30 dias, houve ${bh.diasEstresse} dia${bh.diasEstresse > 1 ? 's' : ''} com restrição (evapotranspiração real ${n0(bh.eta30)} mm frente a ${n0(bh.etc30)} mm potenciais).` : '.';
+      if (bh.ksAtual < 1 && m) { pontos += 2; atencao.push(`Restrição hídrica atual (Ks ${bh.ksAtual.toFixed(2).replace('.', ',')}; ${bh.atual.toFixed(0)}% da água disponível)${dCrit ? ', com fases críticas se aproximando' : ''}.`); }
     }
     out.push(`<h4>Clima recente e água no solo</h4><p>${t}</p>`);
-    let tp = `A previsão para os próximos 15 dias indica <b>${p15.toFixed(0)} mm</b> de chuva para ${et15.toFixed(0)} mm de evapotranspiração de referência.`;
-    if (bh.minFut != null) tp += ` Mantida a previsão, o armazenamento deve chegar a no mínimo ${bh.minFut.toFixed(0)}%${bh.diasEstresseFut ? ` (${bh.diasEstresseFut} dias abaixo de 40%)` : ''}.`;
+    let tp = `A previsão para os próximos 15 dias indica <b>${p15.toFixed(0)} mm</b> de chuva para ${et15.toFixed(0)} mm de evapotranspiração de referência${Math.abs(bh.fator.f - 1) >= .03 ? ` (${(et15 * bh.fator.f).toFixed(0)} mm após o ajuste pelas estações)` : ''}.`;
+    if (bh.minFut != null) tp += ` Mantida a previsão, a água no solo deve chegar a no mínimo ${bh.minFut.toFixed(0)}% da disponível${bh.diasEstresseFut ? `, com ${bh.diasEstresseFut} dia${bh.diasEstresseFut > 1 ? 's' : ''} de restrição hídrica (Ks mínimo ${bh.ksMinFut.toFixed(2).replace('.', ',')})` : ', sem restrição hídrica'}.`;
     if (quente) { tp += ` Há ${quente} dia${quente > 1 ? 's' : ''} com máxima prevista ≥ 35 °C.`; if (m && crit15 >= 20) { pontos += 1; atencao.push(`Calor (≥ 35 °C) previsto com ${crit15.toFixed(0)}% da área em fases críticas: risco de abortamento de flores/estruturas.`); } }
     if (geada) { tp += ` Há ${geada} dia${geada > 1 ? 's' : ''} com mínima prevista ≤ 3 °C.`; if (['trigo', 'aveia', 'milho2', 'feijao2'].includes(cid) && m) { pontos += 2; atencao.push('Risco de geada previsto para cultura sensível em ciclo de inverno/segunda safra.'); } }
-    if (bh.minFut != null && bh.minFut < 40 && m && crit15 >= 20) { pontos += 1; atencao.push('Previsão de déficit hídrico coincidindo com fases críticas.'); }
+    if (bh.diasEstresseFut && m && crit15 >= 20) { pontos += 1; atencao.push('Previsão de restrição hídrica coincidindo com fases críticas.'); }
     if (m && p15 > 120) { const dist = distrib(c, m, semSel), fim = dist.reduce((t, v, i) => t + (i >= dist.length - 2 ? v : 0), 0); if (fim >= 20) { pontos += 1; atencao.push(`Chuva elevada prevista (${p15.toFixed(0)} mm) com ${fim.toFixed(0)}% da área em maturação/colheita: risco de perdas de qualidade e atraso na colheita.`); } }
     out.push(`<h4>Previsão (15 dias)</h4><p>${tp}</p>`);
     const ep = estacaoProxima(...(() => { const ct = turf.centroid(f).geometry.coordinates; return [ct[1], ct[0]]; })());
@@ -759,8 +806,8 @@ function gerarAnalise(f) {
   // 5. síntese
   const nivel = pontos >= 5 ? ['Alta', '#b5452f'] : pontos >= 3 ? ['Média', '#d9822b'] : ['Baixa', '#5f8f2a'];
   out.push(`<h4>Pontos de atenção</h4>${atencao.length ? `<ul>${atencao.map(a => `<li>${a}</li>`).join('')}</ul>` : '<p>Nenhum ponto de atenção identificado pelas regras automáticas.</p>'}
-    <p>Prioridade sugerida de vistoria: <span class="prio" style="background:${nivel[1]}">${nivel[0]}</span> <span class="nota">(${pontos} pontos: fases críticas próximas, água no solo, extremos de temperatura, chuva na colheita, atraso de semeadura e tempo desde a última visita)</span></p>
-    <div class="aviso">Limitações: projeção fenológica por calendário médio (sem graus-dia); clima por município = ponto central, estimado por modelo; solos em escala 1:5.000.000; balanço hídrico com capacidade de água estimada pela textura e condição inicial assumida. Confirme em campo antes de usar nas estimativas.</div>
+    <p>Prioridade sugerida de vistoria: <span class="prio" style="background:${nivel[1]}">${nivel[0]}</span> <span class="nota">(${pontos} pontos: fases críticas próximas, restrição hídrica, extremos de temperatura, chuva na colheita, atraso de semeadura e tempo desde a última visita)</span></p>
+    <div class="aviso">Limitações: projeção fenológica por calendário médio (sem graus-dia); clima por município = ponto central, estimado por modelo; solos em escala 1:5.000.000; balanço hídrico FAO-56 com água disponível estimada pela textura, Kc de referência da cultura e condição inicial assumida. Confirme em campo antes de usar nas estimativas.</div>
     <button class="btn sec2" id="bt-copiar">Copiar texto da análise</button>`);
   setTimeout(() => { const b = $('bt-copiar'); if (b) b.onclick = () => { const t = $('f-analise').innerText.replace(/Copiar texto da análise$/, '').trim(); navigator.clipboard?.writeText(t).then(() => { b.textContent = 'Copiado ✓'; }); }; });
   return out.join('');
@@ -797,14 +844,17 @@ const METODOLOGIA = `
 <p>As médias do estado são ponderadas pela área estimada informada na planilha; sem área, usa-se média simples (indicado no painel).</p>
 <h3>6. Clima por município</h3>
 <p>Os valores representam o ponto central (centróide) de cada município. Para os dias passados, são <b>estimativas de modelo ou reanálise</b>, não medições; as estações do INMET são exibidas como referência observada. Indicadores: chuva acumulada, chuva menos evapotranspiração de referência (FAO-56, Penman-Monteith), temperaturas extremas, amplitude térmica, vento máximo e dias seguidos sem chuva (dias com menos de 1 mm).</p>
-<h3>7. Balanço hídrico simplificado</h3>
-<p>Na análise agronômica, calcula-se um balanço hídrico sequencial diário (método de Thornthwaite-Mather) a partir de 45 dias antes de hoje até 15 dias de previsão. A capacidade de água disponível é estimada pela textura predominante do solo no município, para 60 cm de profundidade de raízes (arenosa ~40 mm, média ~65 mm, argilosa ~90 mm). A evapotranspiração da cultura é a de referência multiplicada por um coeficiente de cultura (Kc) ponderado pelos estádios da área semeada (0,4 na emergência, 0,75 no vegetativo, 1,1 nas fases críticas, 0,5 na maturação, 0,3 na colheita e em área não semeada). O armazenamento inicial é assumido em 50%, e os 15 primeiros dias servem de ajuste. Armazenamento abaixo de 40% é tratado como indicativo de restrição hídrica.</p>
+<h3>7. Evapotranspiração e balanço hídrico</h3>
+<p><b>Evapotranspiração de referência (ET0).</b> Vem da Open-Meteo (variável <i>et0_fao_evapotranspiration</i>), calculada pelo método FAO-56 Penman-Monteith (Allen et al., 1998) com temperatura, umidade, vento a 2 m, radiação solar e pressão estimados pelos modelos (previsão) ou pela reanálise ERA5 (histórico). As variáveis de entrada são estimadas por modelo no ponto central do município, e não medidas.</p>
+<p><b>Validação e ajuste pelas estações INMET.</b> Para cada estação automática do INMET em MS, a rotina diária calcula a ET0 Penman-Monteith FAO-56 com os dados horários da própria estação: temperaturas máxima e mínima, umidades relativas máxima e mínima, vento médio convertido de 10 m para 2 m (fator 0,748) e radiação global medida, com o saldo de radiação calculado segundo o capítulo 3 da FAO-56. O cálculo foi conferido com o Exemplo 18 do Boletim 56 (3,9 mm/dia). Essa ET0 é comparada com a do modelo no mesmo ponto, separadamente para a reanálise ERA5 e para o modelo de previsão. São calculados número de dias, médias, viés (mm/dia e %), RMSE e correlação, exibidos no popup de cada estação. O fator de ajuste é a razão entre as médias (estação ÷ modelo). Ele só é usado com pelo menos 30 dias comparados, fica limitado entre 0,7 e 1,3 e é interpolado para cada município pelo inverso do quadrado da distância das estações a até 150 km. Quando não há estação válida, usa-se a ET0 do modelo sem ajuste.</p>
+<p><b>Coeficiente de cultura (Kc).</b> Os valores de referência são os da FAO-56 (tabela 12) para cada cultura (Kc inicial / médio / final): soja 0,40 / 1,15 / 0,50; milho 0,30 / 1,20 / 0,60; sorgo 0,30 / 1,05 / 0,55; amendoim 0,40 / 1,15 / 0,60; arroz 1,05 / 1,20 / 0,75; feijão 0,40 / 1,15 / 0,35; algodão 0,35 / 1,18 / 0,60; trigo 0,30 / 1,15 / 0,30; aveia 0,30 / 1,15 / 0,25. Podem ser substituídos pela equipe na aba Parâmetros da planilha. A curva de Kc segue os estádios da planilha: valor inicial até o segundo estádio, subida linear até o primeiro estádio crítico, valor médio até o fim das fases críticas e queda linear até a colheita. Na área colhida ou não semeada usa-se 0,30 (solo com palhada). Cada semana de semeadura é tratada como um grupo com sua própria idade, e o Kc do município é a média ponderada pela área semeada em cada semana.</p>
+<p><b>Balanço hídrico da zona radicular (FAO-56, capítulo 8).</b> O cálculo é diário, de 45 dias antes de hoje até 15 dias de previsão. A água total disponível (TAW) é estimada pela textura predominante para 60 cm de raízes (arenosa ~40 mm, média ~65 mm, argilosa ~90 mm). A água facilmente disponível é RAW = p·TAW, com p de cada cultura (tabela 22; soja 0,50, milho 0,55, feijão 0,45, algodão 0,65 etc.), ajustado pela demanda do dia (p + 0,04·(5 − ETc)). Quando a depleção ultrapassa a RAW, a evapotranspiração real é reduzida pelo coeficiente de estresse Ks = (TAW − Dr)/((1 − p)·TAW). A chuva entra integralmente, e o excedente acima da capacidade é perdido por drenagem. A depleção inicial é assumida em 50% da TAW, e os primeiros 15 dias servem de ajuste. Ks &lt; 1 indica restrição hídrica.</p>
 <h3>8. Fotos de campo</h3>
 <p>A cultura de cada foto é identificada pela subpasta (por exemplo “04_Fotos_Campo/Soja”). A posição é lida do GPS gravado na foto (EXIF); quando a foto não tem GPS, como as enviadas pelo WhatsApp, o painel lê por reconhecimento de texto (OCR) o carimbo de data e coordenadas impresso na imagem pelo aplicativo de câmera. O município é obtido pela sobreposição do ponto com a malha municipal.</p>
 <h3>9. Relatos de viagem</h3>
 <p>São lidos arquivos .docx, .pdf, .txt e .md. A data vem do nome do arquivo (AAAA-MM-DD), da primeira data no texto ou da data de modificação. Os municípios citados são identificados pelo nome (com inicial maiúscula, ignorando acentos) e as culturas por palavras-chave. A análise mostra os trechos que citam o município e a cultura.</p>
 <h3>10. Análise agronômica automática e prioridade de vistoria</h3>
-<p>O texto da análise é montado por regras explícitas a partir dos itens acima. A prioridade de vistoria soma pontos para: área em fases críticas nas próximas três semanas (≥ 30%), armazenamento de água abaixo de 40%, calor ≥ 35 °C ou déficit hídrico previsto durante fases críticas, risco de geada em culturas sensíveis, chuva elevada na maturação ou colheita, semeadura atrasada em relação ao estado e ausência de informação de campo nos últimos 30 dias (Alta ≥ 5 pontos; Média 3–4; Baixa ≤ 2).</p>
+<p>O texto da análise é montado por regras explícitas a partir dos itens acima. A prioridade de vistoria soma pontos para: área em fases críticas nas próximas três semanas (≥ 30%), restrição hídrica atual (Ks &lt; 1), calor ≥ 35 °C ou déficit hídrico previsto durante fases críticas, risco de geada em culturas sensíveis, chuva elevada na maturação ou colheita, semeadura atrasada em relação ao estado e ausência de informação de campo nos últimos 30 dias (Alta ≥ 5 pontos; Média 3–4; Baixa ≤ 2).</p>
 <h3>11. Resumo da safra (PDF)</h3>
 <p>O resumo usa o período e as culturas escolhidos. Para cada cultura, apresenta a evolução da semeadura no estado e por região imediata, a distribuição por estádio, o clima do período nas áreas da cultura (ponderado pela área) e as informações de campo do período. O clima vem do histórico permanente; dias futuros vêm da previsão e são identificados como tal.</p>
 <h3>12. Limitações</h3>
@@ -844,14 +894,15 @@ $('bt-resumo').onclick = () => {
 };
 async function imagemDataURL(url) { const r = await fetch(url); const b = await r.blob(); return await new Promise(ok => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.readAsDataURL(b); }); }
 // clima histórico do período: histórico permanente + modelo atual (dias recentes e previsão)
-const _hist = {};
+const _hist = {}, _fat = {};
+const fatorMun = (cd, tipo) => { const k = cd + tipo; if (_fat[k] == null) { const ct = centroMun(cd); _fat[k] = ct ? fatorET0(ct[0], ct[1], tipo).f : 1; } return _fat[k]; };
 async function climaDiario(ini, fim) {
   const anos = []; for (let y = ini.getFullYear(); y <= fim.getFullYear(); y++) anos.push(y);
   const dias = {};   // data -> {fonte, mun:{cd:{p,tx,tn,et0}}}
   for (const y of anos) { _hist[y] = _hist[y] || await pegar(`dados/clima/historico/modelo_${y}.json`); const h = _hist[y]; if (!h) continue;
-    h.datas.forEach((d, i) => { const dt = deISO(d); if (dt < ini || dt > fim) return; const mun = {}; for (const cd in h.mun) mun[cd] = {p: h.mun[cd].p[i], tx: h.mun[cd].tx[i], tn: h.mun[cd].tn[i], et0: h.mun[cd].et0[i]}; dias[d] = {fonte: h.fonte[i], mun}; }); }
+    h.datas.forEach((d, i) => { const dt = deISO(d); if (dt < ini || dt > fim) return; const mun = {}; for (const cd in h.mun) mun[cd] = {p: h.mun[cd].p[i], tx: h.mun[cd].tx[i], tn: h.mun[cd].tn[i], et0: h.mun[cd].et0[i] == null ? null : h.mun[cd].et0[i] * fatorMun(cd, h.fonte[i] === 'era5' ? 'era5' : 'previsao')}; dias[d] = {fonte: h.fonte[i], mun}; }); }
   await garantirClima();
-  if (CL) CL.datas.forEach((d, i) => { const dt = deISO(d); if (dt < ini || dt > fim || (dias[d] && d < CL.hoje)) return; const mun = {}; for (const cd in CL.mun) mun[cd] = {p: CL.mun[cd].p[i], tx: CL.mun[cd].tx[i], tn: CL.mun[cd].tn[i], et0: CL.mun[cd].et0[i]}; dias[d] = {fonte: d >= CL.hoje ? 'previsão' : 'modelo', mun}; });
+  if (CL) CL.datas.forEach((d, i) => { const dt = deISO(d); if (dt < ini || dt > fim || (dias[d] && d < CL.hoje)) return; const mun = {}; for (const cd in CL.mun) mun[cd] = {p: CL.mun[cd].p[i], tx: CL.mun[cd].tx[i], tn: CL.mun[cd].tn[i], et0: CL.mun[cd].et0[i] == null ? null : CL.mun[cd].et0[i] * fatorMun(cd, 'previsao')}; dias[d] = {fonte: d >= CL.hoje ? 'previsão' : 'modelo', mun}; });
   return dias;
 }
 function resumoClima(dias, pesos) {   // pesos: {cd: área}
@@ -937,7 +988,7 @@ async function gerarPDF(ini, fim, sel, opts) {
       const rc = resumoClima(dias, pesos);
       if (!rc) par('Sem dados de clima no histórico para este período.', 9, CINZA);
       else {
-        tabela(['Indicador', 'Valor'], [['Dias com dados', `${rc.dias} (${fmtD(deISO(rc.ini))} a ${fmtD(deISO(rc.fim))})`], ['Chuva acumulada (média ponderada pela área)', n0(rc.p) + ' mm'], ['Evapotranspiração de referência', n0(rc.et0) + ' mm'],
+        tabela(['Indicador', 'Valor'], [['Dias com dados', `${rc.dias} (${fmtD(deISO(rc.ini))} a ${fmtD(deISO(rc.fim))})`], ['Chuva acumulada (média ponderada pela área)', n0(rc.p) + ' mm'], ['Evapotranspiração de referência (ajustada pelas estações INMET)', n0(rc.et0) + ' mm'],
           ['Chuva menos evapotranspiração', n0(rc.p - rc.et0) + ' mm'], ['Maior sequência de dias sem chuva (média da área)', rc.seco + (rc.seco === 1 ? ' dia' : ' dias')], ['Temperatura máxima registrada', n1(rc.txMax) + ' °C'], ['Temperatura mínima registrada', n1(rc.tnMin) + ' °C'],
           ['Dias com máxima de 35 °C ou mais em algum município', String(rc.quente)], ['Dias com mínima de 3 °C ou menos em algum município', String(rc.geada)],
           ['Fonte dos dias', Object.entries(rc.fontes).map(([f, n]) => `${f === 'era5' ? 'reanálise ERA5' : f === 'modelo' ? 'análise do modelo' : 'previsão'}: ${n}`).join('; ')]], {tableWidth: 150});
@@ -996,5 +1047,5 @@ $('busca').onchange = e => { const f = dadosMun?.features.find(x => norm(x.prope
   L.geoJSON(mun, {pane: 'clique', style: {stroke: false, fill: true, fillOpacity: 0}, onEachFeature: (f, l) => {
     l.on('click', () => selecionar(f)); l.bindTooltip(f.properties.NM_MUN, {sticky: true, direction: 'top', opacity: .9}); }}).addTo(mapa);
   mapa.fitBounds(L.geoJSON(mun).getBounds(), {padding: [10, 10]});
-  garantirClima(); pegar('dados/clima/estacoes_inmet.json').then(e => { EST = e; });
+  garantirClima(); pegar('dados/clima/estacoes_inmet.json').then(e => { EST = e; }); pegar('dados/clima/validacao_et0.json').then(v => { VAL = v; for (const k in _fat) delete _fat[k]; });
 })();
