@@ -1123,7 +1123,7 @@ async function gerarPDF(ini, fim, sel, opts) {
     if (logo) doc.addImage(logo, 'PNG', M, 9, 9, 13.3);
     doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(31, 42, 29); doc.text('Companhia Nacional de Abastecimento – Conab', M + 13, 13);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...CINZA);
-    doc.text('Superintendência Regional de Mato Grosso do Sul', M + 13, 17.2); doc.text('Setor de Geotecnologia e Levantamento de Safras – SEGEO-MS', M + 13, 21.2);
+    doc.text('Superintendência Regional de Mato Grosso do Sul', M + 13, 17.2); doc.text('Setor de Apoio à Logística e à Gestão de Oferta – SEGEO-MS', M + 13, 21.2);
     doc.setDrawColor(...VERDE); doc.setLineWidth(.6); doc.line(M, 25.5, W - M, 25.5);
   };
   let y = 0;
