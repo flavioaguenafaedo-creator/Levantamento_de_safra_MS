@@ -493,36 +493,95 @@ document.getElementById('c-est').onchange=atualizarEst;
 // Fotos de campo: posição e data lidas do EXIF, só no navegador
 // =====================================================================
 let camFotos=null, fotosSemGps=[];
+const OCR_CDN={tess:"https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js",
+  worker:"https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js",
+  core:"https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1",
+  lang:"https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int"};
+const CACHE_FOTOS='painel-safra.fotos.v1';
+const lsGet=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}};
+const lsSet=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
+const MESES=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+function carregarScript(u){return new Promise((ok,er)=>{const s=document.createElement('script');s.src=u;s.onload=ok;s.onerror=er;document.head.appendChild(s)})}
+let _ocr=null;
+function ocrWorker(){
+  if(_ocr)return _ocr;
+  _ocr=(async()=>{if(!window.Tesseract)await carregarScript(OCR_CDN.tess);
+    const w=await Tesseract.createWorker('eng',1,{workerPath:OCR_CDN.worker,corePath:OCR_CDN.core,langPath:OCR_CDN.lang});
+    await w.setParameters({tessedit_pageseg_mode:'6'});return w})();
+  _ocr.catch(()=>{_ocr=null});return _ocr;
+}
+// Lê o carimbo vermelho (data e coordenadas escritas na imagem por apps de câmera)
+async function lerCarimbo(file){
+  const bmp=await createImageBitmap(file),W=bmp.width,H=bmp.height,faixa=Math.round(H*.16),sc=Math.min(3,Math.max(.4,1600/W));
+  const tentar=async y0=>{
+    const c=document.createElement('canvas');c.width=Math.round(W*sc);c.height=Math.round(faixa*sc);
+    const g=c.getContext('2d');g.drawImage(bmp,0,y0,W,faixa,0,0,c.width,c.height);
+    const d=g.getImageData(0,0,c.width,c.height),px=d.data;let n=0;
+    for(let k=0;k<px.length;k+=4){const r=px[k],gg=px[k+1],b=px[k+2];const red=r>150&&gg<110&&b<110&&r-Math.max(gg,b)>70;if(red)n++;px[k]=px[k+1]=px[k+2]=red?0:255}
+    if(n<400)return null;
+    g.putImageData(d,0,0);
+    const w=await ocrWorker();return interpretarCarimbo((await w.recognize(c)).data.text);
+  };
+  const r=(await tentar(0))||(await tentar(H-faixa));bmp.close&&bmp.close();return r;
+}
+function interpretarCarimbo(txt){
+  const t=String(txt||'').replace(/[Oo](?=\d)/g,'0').replace(/[‐‑–—]/g,'-'),out={};
+  // aceita "-22,2003S -52,8977W", "-22.2003, -52.8977", "22,2003 S 52,8977 W"
+  const m=t.match(/(-?\d{1,2}[.,]\d{2,7})\s*°?\s*([NS])?\s*[,;]?\s+(-?\d{1,3}[.,]\d{2,7})\s*°?\s*([EWLO])?/i)
+        ||t.match(/(-?\d{1,2}[.,]\d{2,7})\s*°?\s*([NS])?\s*[,;]\s*(-?\d{1,3}[.,]\d{2,7})\s*°?\s*([EWLO])?/i);
+  if(m){let lat=parseFloat(m[1].replace(',','.')),lon=parseFloat(m[3].replace(',','.'));
+    if(/s/i.test(m[2]||''))lat=-Math.abs(lat);if(/[wo]/i.test(m[4]||''))lon=-Math.abs(lon);
+    if(Math.abs(lat)<=90&&Math.abs(lon)<=180&&(lat||lon)){out.lat=lat;out.lon=lon}}
+  let d=t.match(/(\d{1,2})\s+de\s+([a-zçA-ZÇ]+)\.?\s+de\s+(\d{4})/);
+  if(d){const i=MESES.indexOf(d[2].toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').slice(0,3));if(i>=0)out.data=new Date(+d[3],i,+d[1],12)}
+  else if((d=t.match(/(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})(?:\D+(\d{1,2}):(\d{2}))?/)))out.data=new Date(+d[3],d[2]-1,+d[1],d[4]?+d[4]:12,d[5]?+d[5]:0);
+  return out.lat!=null||out.data?out:null;
+}
 async function carregarFotos(fotos){
   const cb=document.getElementById('c-fotos'),info=document.getElementById('info-fotos'),nf=document.getElementById('n-fotos');
   if(camFotos){mapa.removeLayer(camFotos);camFotos=null}
   if(!fotos.length){info.textContent='Nenhuma foto encontrada na pasta.';cb.disabled=true;return}
-  info.textContent=`Lendo localização de ${fotos.length} fotos…`;
-  const pts=[];fotosSemGps=[];
+  const cache=lsGet(CACHE_FOTOS,{}),pts=[];fotosSemGps=[];let ocrFalhou=false,k=0;
   for(const a of fotos){
-    try{const f=await a.obter();
-      const ex=await exifr.parse(f,{tiff:true,exif:true,gps:true,xmp:false,icc:false,iptc:false,jfif:false,ihdr:false});
-      if(ex&&isFinite(ex.latitude)&&isFinite(ex.longitude))pts.push({a,f,lat:ex.latitude,lon:ex.longitude,data:ex.DateTimeOriginal||ex.CreateDate||new Date(f.lastModified),cam:[ex.Make,ex.Model].filter(Boolean).join(' ')});
+    k++;info.textContent=`Lendo localização das fotos… ${k}/${fotos.length}`;
+    try{const f=await a.obter(),chave=f.name+'|'+f.size;let r=cache[chave];
+      if(!r){
+        let ex=null;try{ex=await exifr.parse(f,{tiff:true,exif:true,gps:true,xmp:false,icc:false,iptc:false,jfif:false,ihdr:false})}catch(e){}
+        r={src:'sem'};
+        if(ex&&isFinite(ex.latitude)&&isFinite(ex.longitude))r={lat:ex.latitude,lon:ex.longitude,src:'gps'};
+        const dEx=ex&&(ex.DateTimeOriginal||ex.CreateDate);if(dEx)r.data=new Date(dEx).toISOString();
+        r.cam=ex?[ex.Make,ex.Model].filter(Boolean).join(' '):'';
+        if(r.lat==null&&!ocrFalhou&&/\.(jpe?g|png|webp)$/i.test(f.name)){
+          try{const c=await lerCarimbo(f);if(c){if(c.lat!=null){r.lat=c.lat;r.lon=c.lon;r.src='carimbo'}if(c.data&&!r.data)r.data=c.data.toISOString()}}
+          catch(e){console.warn('Leitura do carimbo indisponível:',e);ocrFalhou=true}
+        }
+        if(r.lat!=null||!ocrFalhou)cache[chave]=r;
+      }
+      if(r.lat!=null)pts.push({a,f,lat:r.lat,lon:r.lon,src:r.src,cam:r.cam,data:r.data?new Date(r.data):new Date(f.lastModified),dataArq:!r.data});
       else fotosSemGps.push(a.caminho);
     }catch(e){fotosSemGps.push(a.caminho)}
   }
+  lsSet(CACHE_FOTOS,cache);
+  if(_ocr){try{(await _ocr).terminate()}catch(e){}_ocr=null}
+  const fmtData=p=>p.dataArq?'Data do arquivo: '+p.data.toLocaleDateString('pt-BR'):p.data.toLocaleString('pt-BR',{dateStyle:'short',timeStyle:p.data.getHours()===12&&!p.data.getMinutes()?undefined:'short'});
   camFotos=L.layerGroup(pts.map(p=>{
     const mun=dadosMun?.features.find(m=>turf.booleanPointInPolygon([p.lon,p.lat],m));
     const pasta=p.a.caminho.split('/').slice(-2,-1)[0]||'';
-    const mk=L.circleMarker([p.lat,p.lon],{radius:7,color:'#fff',weight:2,fillColor:'#b5452f',fillOpacity:1,pane:'limites'});
-    mk.bindTooltip(`${p.data instanceof Date?p.data.toLocaleDateString('pt-BR'):''} · ${mun?mun.properties.NM_MUN:'fora do MS'}`,{direction:'top'});
+    const mk=L.circleMarker([p.lat,p.lon],{radius:7,color:'#fff',weight:2,fillColor:p.src==='gps'?'#b5452f':'#d9822b',fillOpacity:1,pane:'limites'});
+    mk.bindTooltip(`${p.data.toLocaleDateString('pt-BR')} · ${mun?mun.properties.NM_MUN:'fora do MS'}`,{direction:'top'});
     mk.on('click',()=>{
       const url=p.url||(p.url=URL.createObjectURL(p.f));
       mk.bindPopup(`<div class="foto-pop"><img src="${url}" onclick="window.open('${url}')" title="Abrir em tamanho real">
-        <b>${mun?mun.properties.NM_MUN:'Fora do MS'}</b><br>${p.data instanceof Date?p.data.toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'}):'Data não registrada'}
-        <br><span class="vazio">${p.a.caminho.split('/').pop()}${pasta?' · pasta '+pasta:''}<br>${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}${p.cam?' · '+p.cam:''}</span>
+        <b>${mun?mun.properties.NM_MUN:'Fora do MS'}</b><br>${fmtData(p)}
+        <br><span class="vazio">${p.a.caminho.split('/').pop()}${pasta?' · pasta '+pasta:''}<br>${p.lat.toFixed(5)}, ${p.lon.toFixed(5)} · posição ${p.src==='gps'?'pelo GPS da foto':'lida do carimbo na imagem'}${p.cam?' · '+p.cam:''}</span>
         <br><a href="${url}" target="_blank">Abrir em tamanho real</a></div>`,{maxWidth:300}).openPopup();
     });
     return mk;}));
   cb.disabled=!pts.length;nf.textContent=pts.length?`(${pts.length})`:'';
-  info.innerHTML=`${pts.length} fotos com localização`+(fotosSemGps.length?` · <span title="${fotosSemGps.join('\n')}" style="text-decoration:underline dotted;cursor:help">${fotosSemGps.length} sem GPS</span> (não aparecem no mapa; ative a localização na câmera)`:'');
-  if(cb.checked&&camFotos)camFotos.addTo(mapa);
-  if(pts.length&&!cb.checked){cb.checked=true;camFotos.addTo(mapa)}
+  const nC=pts.filter(p=>p.src==='carimbo').length;
+  info.innerHTML=`${pts.length} fotos no mapa${nC?` (${nC} pelo carimbo na imagem)`:''}`+(fotosSemGps.length?` · <span title="${fotosSemGps.join('\n')}" style="text-decoration:underline dotted;cursor:help">${fotosSemGps.length} sem localização</span> (sem GPS e sem carimbo legível)`:'')
+    +(ocrFalhou?'<br>Leitura do carimbo indisponível neste navegador (sem internet para baixar o leitor).':'');
+  if(pts.length){cb.checked=true;camFotos.addTo(mapa)}
 }
 document.getElementById('c-fotos').onchange=e=>{if(!camFotos)return;e.target.checked?camFotos.addTo(mapa):mapa.removeLayer(camFotos)};
 </script>
