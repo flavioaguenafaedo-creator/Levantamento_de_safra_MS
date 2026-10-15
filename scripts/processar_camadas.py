@@ -30,7 +30,23 @@ CRS_PADRAO = "EPSG:4674"  # SIRGAS 2000, usado quando o .prj está ausente
 log = []
 
 
+def corrigir_prj(caminho: Path):
+    """.prj com acento em Latin-1 (ex.: "Cônica") quebra a leitura: regrava em ASCII."""
+    prj = caminho.with_suffix(".prj")
+    if not prj.exists():
+        return
+    b = prj.read_bytes()
+    try:
+        b.decode("utf-8")
+    except UnicodeDecodeError:
+        import unicodedata
+        t = unicodedata.normalize("NFKD", b.decode("latin-1")).encode("ascii", "ignore").decode()
+        prj.write_text(t, encoding="ascii")
+        log.append(f"{prj.name}: nome da projeção regravado sem acentos")
+
+
 def ler(caminho: Path) -> gpd.GeoDataFrame:
+    corrigir_prj(caminho)
     g = gpd.read_file(caminho)
     # sem .cpg o texto pode vir em Latin-1 lido como UTF-8 ("Ã§"): relê com a codificação certa
     txt = g.select_dtypes(include=["object", "string"]).astype(str)
@@ -152,25 +168,32 @@ for f in shps("solos")[:1]:
 
 # ------------------------------------------------------------ uso do solo
 CODIGOS_USO = {"SOJ": "Soja", "CAN": "Cana-de-açúcar", "MIL": "Milho", "PST": "Pastagem", "REM": "Remanescente/vegetação",
-               "EUC": "Eucalipto", "PIN": "Pinus", "SER": "Seringueira", "OUT": "Outros usos"}
+               "EUC": "Eucalipto", "PIN": "Pinus", "SER": "Seringueira", "OUT": "Outros usos",
+               "SGO": "Sorgo", "ALG": "Algodão", "MTO": "Milheto"}
 USO_BRUTO = []
+CLASSES_USO = {}          # camada -> classes (o painel acha o mapa de cada cultura por aqui)
 for f in shps("uso_solo"):
     g = ler(f)
     g = gpd.clip(g[g.intersects(area_ms)], area_ms)
     c = coluna(g, "UCS", "CLASSE", "CLASS", "USO", "CULTURA", "DESCRICAO")
-    classe = g[c].astype(str).str.strip().str.upper().map(lambda v: CODIGOS_USO.get(v, v.title())) if c else f.stem
+    # código (SOJ, MIL...) vira nome; nome já escrito por extenso (ex.: "Milho 2ª safra") é mantido
+    classe = g[c].astype(str).str.strip().map(lambda v: CODIGOS_USO.get(v.upper(), v)) if c else f.stem
     g = g.assign(classe=classe)[["classe", "geometry"]]
     USO_BRUTO.append((f.name, g.copy()))
-    # área em ha (projeção equivalente) antes de simplificar
-    g["area_ha"] = g.to_crs("ESRI:102033").area / 1e4
-    g = g.dissolve("classe", as_index=False, aggfunc={"area_ha": "sum"})
+    # recorte por município: uma feição por classe e município (o painel pinta a água no solo sobre as lavouras de cada município)
+    EQ = "ESRI:102033"
+    g = gpd.overlay(g.to_crs(EQ), municipios[["CD_MUN", "geometry"]].to_crs(EQ), how="intersection", keep_geom_type=True)
+    g["area_ha"] = g.area / 1e4                                    # área em ha (projeção equivalente) antes de simplificar
+    g = g.dissolve(["classe", "CD_MUN"], as_index=False, aggfunc={"area_ha": "sum"}).to_crs(4326)
+    g["CD_MUN"] = g["CD_MUN"].astype(str).str.replace(r"\.0$", "", regex=True)
     g["area_ha"] = g["area_ha"].round(0)
     salvar(g, f"uso_{f.stem.lower()}", TOL_USO)
+    CLASSES_USO[f"uso_{f.stem.lower()}"] = sorted(g["classe"].unique().tolist())
 
 
 # ------------------------------------------------- solos ocupados por cada cultura (uso x solos x municípios)
 # Área (ha, projeção equivalente) de cada classe de uso agrícola por classe e textura de solo, por município e no estado.
-CULTURAS_USO = {"Soja", "Cana-de-açúcar", "Milho", "Algodão", "Arroz", "Feijão", "Sorgo", "Trigo", "Aveia", "Amendoim"}
+CULTURAS_USO = {"Soja", "Cana-de-açúcar", "Milho", "Milho 2ª safra", "Algodão", "Arroz", "Feijão", "Sorgo", "Trigo", "Aveia", "Amendoim"}
 if SOLOS_MS is not None and USO_BRUTO:
     EQ = "ESRI:102033"
     unid = gpd.overlay(SOLOS_MS[["ordem", "textura", "geometry"]].to_crs(EQ),
@@ -211,6 +234,7 @@ camadas = sorted(p.stem for p in SAI.glob("*.geojson"))
 manifesto = {
     "atualizado_em": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     "camadas": camadas,
+    "classes": CLASSES_USO,
     "log": log,
 }
 (SAI / "manifesto.json").write_text(json.dumps(manifesto, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -192,7 +192,7 @@ let SOLO_CULT = null;
 const cadDe = tex => Object.entries(tex).reduce((t, [k, p]) => t + (CAD_TEX[k] ?? 60) * p / 100, 0) || 60;
 function soloCultura(cid, cd) {
   if (!SOLO_CULT || !cid) return null;
-  const base = cid.replace(/\d$/, ''), nome = Object.keys(SOLO_CULT.culturas).find(n => { const c = culturaDe(n); return c && c.id.replace(/\d$/, '') === base; });
+  const nome = Object.keys(SOLO_CULT.culturas).find(n => culturaDe(n)?.id === cid);   // só o mapa da própria cultura (milho 2ª safra não vale para o de verão)
   if (!nome) return null;
   const r = cd ? SOLO_CULT.culturas[nome].mun[cd] : SOLO_CULT.culturas[nome].estado; if (!r || !r.area) return null;
   const pct = o => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, 100 * v / r.area]));
@@ -222,7 +222,7 @@ function soloDoMunicipio(f) {
 }
 
 // ------------------------------------------------------------------ uso e cobertura (camadas publicadas pela rotina)
-const CORES_USO = {"Soja": "#e0a526", "Cana-de-açúcar": "#3f9a5a", "Milho": "#d4694a", "Pastagem": "#c9d99a", "Remanescente/vegetação": "#2f5d3a", "Eucalipto": "#6d8fbf", "Pinus": "#a37fbf", "Seringueira": "#8a6f4e", "Outros usos": "#bdbdbd"};
+const CORES_USO = {"Soja": "#e0a526", "Cana-de-açúcar": "#3f9a5a", "Milho": "#d4694a", "Pastagem": "#c9d99a", "Remanescente/vegetação": "#2f5d3a", "Eucalipto": "#6d8fbf", "Pinus": "#a37fbf", "Seringueira": "#8a6f4e", "Outros usos": "#bdbdbd", "Milho 2ª safra": "#c98b14", "Sorgo": "#a83a2a", "Algodão": "#7d8fa3", "Milheto": "#b9a183"};
 const PALETA = ["#e3b23c", "#4f8a3c", "#9ccf7f", "#d4694a", "#6d8fbf", "#a37fbf", "#c4c4a0", "#3f6f6a"];
 function camUso(nome) {
   const id = 'u_' + nome, rot = nome.slice(4).replace(/_/g, ' ');
@@ -231,13 +231,25 @@ function camUso(nome) {
   defCam(id, {grupo: 'uso', nome: rot.charAt(0).toUpperCase() + rot.slice(1), op: .85,
     estilo: f => ({pane: 'uso', fillColor: cor(f.properties.classe || ''), fillOpacity: OPC(id), weight: 0}),
     montar: async () => { const d = await pegar(`dados/${nome}.geojson`); if (!d) return null;
-      classes = [...new Set(d.features.map(f => f.properties.classe))];
-      CAM[id].legenda = d.features.map(f => `<div><i style="background:${cor(f.properties.classe)}"></i>${esc(f.properties.classe)}${f.properties.area_ha ? ' · ' + (f.properties.area_ha / 1e6).toLocaleString('pt-BR', {maximumFractionDigits: 2}) + ' mi ha' : ''}</div>`).join('');
+      USO_GEO[nome] = d; classes = [...new Set(d.features.map(f => f.properties.classe))];
+      const area = {}; d.features.forEach(f => area[f.properties.classe] = (area[f.properties.classe] || 0) + (f.properties.area_ha || 0));
+      CAM[id].legenda = classes.map(c => `<div><i style="background:${cor(c)}"></i>${esc(c)}${area[c] ? ' · ' + (area[c] >= 1e5 ? (area[c] / 1e6).toLocaleString('pt-BR', {maximumFractionDigits: 2}) + ' mi ha' : n0(area[c]) + ' ha') : ''}</div>`).join('');
       atualizarSub(id);
       return L.geoJSON(d, {style: CAM[id].estilo, interactive: false}); },
     sub: () => `<div class="leg">${CAM[id].legenda || ''}</div>${solosNaCamada(classes)}<div class="nota">Fonte: ${esc(fonteUso(nome))}.</div>`});
 }
-function fonteUso(nome) { return /soja|cana|ms26/i.test(nome) ? 'mapeamento de uso e cobertura da Aprosoja-MS' : 'mapeamento de uso e cobertura enviado à SEGEO-MS'; }
+function fonteUso(nome) { return /soja|cana|milho|sorgo|algod|ms2\d/i.test(nome) ? `mapeamento de uso e cobertura da Aprosoja-MS${/2a_safra/i.test(nome) ? ' (2ª safra)' : ''}` : 'mapeamento de uso e cobertura enviado à SEGEO-MS'; }
+// geometrias de uso já baixadas (uma feição por classe e município) e busca do mapa de uma cultura
+const USO_GEO = {};
+function arquivoUso(cid) {   // nome da camada uso_* que tem a cultura (o mais recente pelo nome)
+  return (MAN?.camadas || []).filter(n => n.startsWith('uso_')).sort().reverse().find(n => (MAN.classes?.[n] || [n.replace(/^uso_/, '').replace(/_/g, ' ')]).some(cl => culturaDe(cl)?.id === cid)) || null;
+}
+async function usoDaCultura(cid) {
+  const n = arquivoUso(cid); if (!n) return null;
+  USO_GEO[n] = USO_GEO[n] || await pegar(`dados/${n}.geojson`); const d = USO_GEO[n]; if (!d) return null;
+  const fs = d.features.filter(f => culturaDe(f.properties.classe || '')?.id === cid);
+  return fs.length ? {nome: n, fc: {type: 'FeatureCollection', features: fs}} : null;
+}
 function barraSolo(o, cores) {
   const it = Object.entries(o).filter(([, v]) => v >= .5).sort((a, b) => b[1] - a[1]);
   return `<div class="barra" style="height:12px">${it.map(([k, v]) => `<i title="${esc(k)}: ${v.toFixed(0)}%" style="width:${v}%;background:${cores[k] || '#bdbdbd'}"></i>`).join('')}</div>
@@ -504,11 +516,14 @@ function classeAgua(bh) {   // índice da classe, -1 = sem lavoura em campo, nul
 }
 defCam('agua', {grupo: 'clima', nome: 'Água no solo', op: .8, desab: true, st: 'conecte a pasta',
   estilo: f => { const c = cultAtual(), cd = String(+f.properties.CD_MUN), B = bhCultura(c);
+    if (c && B && !c.mun[cd] && CAM.agua.fonte) return {pane: 'clima', fill: true, fillColor: COR_SEMCAMPO, fillOpacity: OPC('agua') * .35, weight: 0, stroke: false};   // lavoura mapeada sem dado na planilha
     if (!c || !B || !c.mun[cd]) return {pane: 'clima', fill: false, stroke: false};
     const k = classeAgua(B[cd]); if (k == null) return {pane: 'clima', fill: false, stroke: false};
     return {pane: 'clima', fill: true, fillColor: k < 0 ? COR_SEMCAMPO : CLS_AG[k].cor, fillOpacity: OPC('agua') * (k < 0 ? .6 : 1), weight: 0, stroke: false}; },
   montar: async () => { await garantirClima(); const c = cultAtual(); if (!c || !CL) { setSt('agua', !CL ? 'sem clima ainda' : 'escolha a cultura'); return null; }
-    const L_ = L.geoJSON(dadosMun, {interactive: false, style: CAM.agua.estilo}); atualizarSub('agua'); return L_; },
+    // culturas com mapa de uso (Aprosoja-MS): pinta só as lavouras mapeadas, com a situação do município; sem mapa: o município inteiro
+    const u = await usoDaCultura(c.cid); CAM.agua.fonte = u?.nome || null; CAM.agua.cid = c.cid;
+    const L_ = L.geoJSON(u ? u.fc : dadosMun, {interactive: false, style: CAM.agua.estilo}); atualizarSub('agua'); return L_; },
   sub: () => {
     const c = cultAtual(); if (!c) return '';
     const B = CL ? bhCultura(c) : null, kp = paramsKc(c), area = new Array(4).fill(0); let semCampo = 0, tot = 0;
@@ -518,7 +533,8 @@ defCam('agua', {grupo: 'clima', nome: 'Água no solo', op: .8, desab: true, st: 
       Área com lavoura em campo: ${area.map((v, k) => `${CLS_AG[k].nome.toLowerCase()} <b>${(100 * v / comCampo).toFixed(0)}%</b>`).join(' · ')}` : (B ? 'Nenhum município com lavoura em campo no período.' : '');
     return `<div class="seg seg-wrap" id="modo-ag">${Object.entries(MODOS_AG).map(([k, n]) => `<button data-v="${k}" class="${agVis === k ? 'on' : ''}">${n}</button>`).join('')}</div>
       <div class="resumo">${res}</div>
-      <div class="leg">${CLS_AG.map((x, k) => `<div><i style="background:${x.cor}"></i>${x.nome} (${crit[k]})</div>`).join('')}<div><i style="background:${COR_SEMCAMPO}"></i>Sem lavoura em campo</div></div>
+      <div class="leg">${CLS_AG.map((x, k) => `<div><i style="background:${x.cor}"></i>${x.nome} (${crit[k]})</div>`).join('')}<div><i style="background:${COR_SEMCAMPO}"></i>Sem lavoura em campo${CAM.agua.fonte ? ' (claro: município sem dado na planilha)' : ''}</div></div>
+      <div class="nota" style="color:var(--tinta)">${CAM.agua.fonte && CAM.agua.cid === c.cid ? `Pintado sobre as lavouras de ${esc(c.nome.toLowerCase())} do mapeamento de uso e cobertura da Aprosoja-MS (${esc(CAM.agua.fonte.replace(/^uso_/, '').replace(/_/g, ' ').replace(/\b2a\b/, '2ª'))}); cada lavoura recebe a situação calculada para o seu município.` : CAM.agua.on && CAM.agua.cid === c.cid ? `${esc(c.nome)} não tem mapa de uso: pintado pelo município inteiro.` : ''}</div>
       <div class="nota">${c.semFenologia ? `Demanda da cana: ETc = ET0 × Kc médio anual de ${n2(KC_CANA)} (canaviais com idades misturadas; valor aproximado da curva FAO-56, 0,40 / 1,25 / 0,75). Raízes até ${PROF_CANA} cm; estresse abaixo de ${(100 * (1 - P_CANA)).toFixed(0)}% da água disponível (p = ${n2(P_CANA)}). ` : `Demanda de ${esc(c.nome.toLowerCase())}: ETc = ET0 × Kc (${n2(kp.ini)} no início, ${n2(kp.mid)} no pico, ${n2(kp.fim)} no fim; ${kp.fonte}), seguindo a fase de cada semana de semeadura da planilha. Estresse começa quando a água cai abaixo de ${(100 * (1 - kp.p)).toFixed(0)}% da disponível (p = ${n2(kp.p)}). `}Água disponível pela textura do solo sob a cultura. ${agVis.startsWith('at') ? 'Demanda atendida = consumo estimado ÷ consumo potencial nos dias com lavoura em campo.' : 'Ks = fração da transpiração potencial que a lavoura consegue manter.'} Clique no município para ver o gráfico.</div>`;
   },
   depois: () => document.querySelectorAll('#modo-ag button').forEach(b => b.onclick = () => { agVis = b.dataset.v; CAM.agua.layer && CAM.agua.layer.setStyle(CAM.agua.estilo); atualizarSub('agua'); })});
@@ -533,7 +549,8 @@ function dicaMun(f) {   // dica ao passar o mouse; com a camada de água ligada,
 function atualizarAgua() {
   if (!CAM.agua) return; const c = cultAtual();
   habilitar('agua', !!c); setSt('agua', c ? '' : CANA || PL ? 'escolha a cultura' : 'conecte a pasta');
-  if (CAM.agua.layer) CAM.agua.layer.setStyle(CAM.agua.estilo); else if (CAM.agua.on) redesenhar('agua');
+  if (CAM.agua.layer && CAM.agua.cid === c?.cid) CAM.agua.layer.setStyle(CAM.agua.estilo);
+  else { if (CAM.agua.layer) mapa.removeLayer(CAM.agua.layer); CAM.agua.layer = null; if (CAM.agua.on && c) redesenhar('agua'); }   // outra cultura: outra geometria
   atualizarSub('agua');
 }
 function graficoEst(e) {
@@ -1333,7 +1350,7 @@ const METODOLOGIA = `
 <table><tr><th>Informação</th><th>Fonte</th><th>Atualização</th></tr>
 <tr><td>Limites municipais</td><td>IBGE, malha municipal 2025 (SIRGAS 2000)</td><td>Fixa</td></tr>
 <tr><td>Solos (classe e textura)</td><td>Mapa de Solos do Brasil, IBGE/Embrapa, escala 1:5.000.000</td><td>Fixa</td></tr>
-<tr><td>Uso e cobertura (soja, cana etc.)</td><td>Mapeamento vetorial de uso e cobertura de soja e cana-de-açúcar da Aprosoja-MS (arquivo MS26S1UCS), safra 2025/26; cada classe é exibida como camada</td><td>Quando novos arquivos são enviados</td></tr>
+<tr><td>Uso e cobertura (soja, cana, milho 2ª safra, sorgo, algodão)</td><td>Mapeamentos vetoriais de uso e cobertura da Aprosoja-MS: 1ª safra 2025/26 (arquivo MS26S1UCS: soja e cana-de-açúcar) e 2ª safra 2025 (arquivo MS25S2: milho 2ª safra, sorgo e algodão). Do mapa de 2ª safra foram extraídas só as culturas anuais acompanhadas pela Conab; milheto, pastagem, vegetação, eucalipto e outros usos ficaram de fora</td><td>Quando novos arquivos são enviados</td></tr>
 <tr><td>Rodovias federais e estaduais</td><td>Base vetorial de rodovias de MS fornecida à SEGEO-MS (nome, jurisdição, revestimento, extensão)</td><td>Quando novos arquivos são enviados</td></tr>
 <tr><td>Evolução do plantio</td><td>Planilha semanal preenchida pelos técnicos da SEGEO-MS (% acumulado da área plantada por município)</td><td>Semanal, lida da pasta da equipe</td></tr>
 <tr><td>Previsão diária por município (16 dias)</td><td>Open-Meteo: média de seis modelos globais (ECMWF IFS, NOAA GFS, DWD ICON, CMC GEM, JMA e UK Met Office), no ponto central de cada município, com a faixa entre os modelos</td><td>Diária (06h)</td></tr>
@@ -1359,13 +1376,13 @@ const METODOLOGIA = `
 <p><b>Validação e ajuste pelas estações INMET.</b> Para cada estação automática do INMET em MS, a rotina diária calcula a ET0 Penman-Monteith FAO-56 com os dados horários da própria estação: temperaturas máxima e mínima, umidades relativas máxima e mínima, vento médio convertido de 10 m para 2 m (fator 0,748) e radiação global medida, com o saldo de radiação calculado segundo o capítulo 3 da FAO-56. O cálculo foi conferido com o Exemplo 18 do Boletim 56 (3,9 mm/dia). Essa ET0 é comparada com a do modelo no mesmo ponto, separadamente para a reanálise ERA5 e para o modelo de previsão. São calculados número de dias, médias, viés (mm/dia e %), RMSE e correlação, exibidos no popup de cada estação. O fator de ajuste é a razão entre as médias (estação ÷ modelo). Ele só é usado com pelo menos 30 dias comparados, fica limitado entre 0,7 e 1,3 e é interpolado para cada município pelo inverso do quadrado da distância das estações a até 150 km. Quando não há estação válida, usa-se a ET0 do modelo sem ajuste.</p>
 <p><b>Coeficiente de cultura (Kc).</b> Os valores de referência são os da FAO-56 (tabela 12) para cada cultura (Kc inicial / médio / final): soja 0,40 / 1,15 / 0,50; milho 0,30 / 1,20 / 0,60; sorgo 0,30 / 1,05 / 0,55; amendoim 0,40 / 1,15 / 0,60; arroz 1,05 / 1,20 / 0,75; feijão 0,40 / 1,15 / 0,35; algodão 0,35 / 1,18 / 0,60; trigo 0,30 / 1,15 / 0,30; aveia 0,30 / 1,15 / 0,25. Podem ser substituídos pela equipe na aba Parâmetros da planilha. A curva de Kc segue os estádios da planilha: valor inicial até o segundo estádio, subida linear até o primeiro estádio crítico, valor médio até o fim das fases críticas e queda linear até a colheita. Na área colhida ou não semeada usa-se 0,30 (solo com palhada). Cada semana de semeadura é tratada como um grupo com sua própria idade, e o Kc do município é a média ponderada pela área semeada em cada semana.</p>
 <p><b>Balanço hídrico da zona radicular (FAO-56, capítulo 8).</b> O cálculo é diário, de 45 dias antes de hoje até 15 dias de previsão. A água total disponível (TAW) é estimada pela textura predominante para 60 cm de raízes (arenosa ~40 mm, média ~65 mm, argilosa ~90 mm). A água facilmente disponível é RAW = p·TAW, com p de cada cultura (tabela 22; soja 0,50, milho 0,55, feijão 0,45, algodão 0,65 etc.), ajustado pela demanda do dia (p + 0,04·(5 − ETc)). Quando a depleção ultrapassa a RAW, a evapotranspiração real é reduzida pelo coeficiente de estresse Ks = (TAW − Dr)/((1 − p)·TAW). A chuva entra integralmente, e o excedente acima da capacidade é perdido por drenagem. A depleção inicial é assumida em 50% da TAW, e os primeiros 15 dias servem de ajuste. Ks &lt; 1 indica restrição hídrica.</p>
-<p><b>Camada “Água no solo” e gráfico do município.</b> Para a cultura escolhida, cada município é classificado pelo balanço acima, com a demanda própria da cultura (ETc = ET0 × Kc da fase em que a área semeada está) e o seu limite de estresse (p). Modos: <i>Hoje</i> e <i>Pior dia (15 dias)</i> usam o Ks: atendida (Ks = 1), restrição leve (0,7 a 0,99), moderada (0,4 a 0,7) e severa (abaixo de 0,4). <i>Demanda atendida</i> é o consumo estimado (ETa) dividido pelo consumo potencial (ETc) nos dias com lavoura em campo: atendida (95% ou mais), leve (80 a 95%), moderada (60 a 80%) e severa (abaixo de 60%). Municípios sem área semeada ou já colhida no período aparecem em cinza. Os limites das classes são convenções do painel para leitura rápida, não limiares de perda de produtividade. O gráfico da ficha mostra a água no solo dia a dia (45 dias passados e 15 de previsão, em tracejado), a linha de início do estresse (1 − p), a chuva diária e uma fita com a classe de Ks de cada dia. Quando há mais de uma cultura em campo no município, a ficha compara Kc, demanda, água e Ks entre elas.</p>
+<p><b>Camada “Água no solo” e gráfico do município.</b> Para a cultura escolhida, cada município é classificado pelo balanço acima, com a demanda própria da cultura (ETc = ET0 × Kc da fase em que a área semeada está) e o seu limite de estresse (p). Modos: <i>Hoje</i> e <i>Pior dia (15 dias)</i> usam o Ks: atendida (Ks = 1), restrição leve (0,7 a 0,99), moderada (0,4 a 0,7) e severa (abaixo de 0,4). <i>Demanda atendida</i> é o consumo estimado (ETa) dividido pelo consumo potencial (ETc) nos dias com lavoura em campo: atendida (95% ou mais), leve (80 a 95%), moderada (60 a 80%) e severa (abaixo de 60%). Para as culturas com mapa de uso e cobertura, a camada pinta apenas os polígonos das lavouras mapeadas (recortados por município), cada um com a situação calculada para o seu município; as culturas sem mapa (milho 1ª safra, feijão, trigo, aveia, arroz e amendoim) são pintadas pelo município inteiro. O mapa é a área de referência mais recente disponível e pode não coincidir exatamente com a área da safra em curso. Municípios sem área semeada ou já colhida no período aparecem em cinza. Os limites das classes são convenções do painel para leitura rápida, não limiares de perda de produtividade. O gráfico da ficha mostra a água no solo dia a dia (45 dias passados e 15 de previsão, em tracejado), a linha de início do estresse (1 − p), a chuva diária e uma fita com a classe de Ks de cada dia. Quando há mais de uma cultura em campo no município, a ficha compara Kc, demanda, água e Ks entre elas.</p>
 <p><b>Cana-de-açúcar.</b> A cana não tem acompanhamento fenológico na planilha. Ela aparece na seleção de cultura como “sem fenologia”: a área por município vem do mapeamento da Aprosoja-MS, e o balanço hídrico usa Kc médio anual de 1,0, que é um valor aproximado para canaviais com idades misturadas, entre os valores da FAO-56 (0,40 no início, 1,25 no pico e 0,75 no fim). Usa também p = 0,65 (tabela 22) e raízes até 120 cm (a FAO-56 indica 1,2 a 2,0 m), o que dobra a água disponível em relação às culturas anuais. Kc e profundidade são convenções do painel e devem ser revistos com a equipe.</p>
 <p><b>Filtro por cultura.</b> A cultura escolhida em “Safra e cultura” filtra a ficha, a análise, a camada de água no solo, as fotos no mapa (opção “só a cultura selecionada”, ligada por padrão) e os relatos (só os que citam a cultura; os demais são contados à parte).</p>
 <h3>8. Fotos de campo</h3>
 <p>A cultura de cada foto é identificada pela subpasta (por exemplo “04_Fotos_Campo/Soja”). A posição é lida do GPS gravado na foto (EXIF). Quando a foto não tem GPS, como as enviadas pelo WhatsApp, o painel lê por reconhecimento de texto (OCR) o carimbo de data e coordenadas impresso na imagem pelo aplicativo de câmera. São tentados textos vermelhos, amarelos e brancos (no branco, exige-se contorno escuro), no rodapé e no topo da foto, com uma segunda leitura restrita a dígitos. Leituras com o separador decimal perdido são reparadas apenas quando o resultado cai dentro da faixa geográfica de MS (17°–24,3° S; 50,7°–58,4° O). Entre as datas lidas, vale a mais frequente. O município é obtido pela sobreposição do ponto com a malha municipal.</p>
 <h3>8a. Solos ocupados por cada cultura</h3>
-<p>Para as culturas com mapa de uso e cobertura (atualmente soja e cana-de-açúcar, do mapeamento da Aprosoja-MS), a rotina automática sobrepõe os polígonos da cultura ao mapa de solos e à malha municipal, em projeção de áreas iguais, e soma a área (ha) por classe e por textura de solo, em cada município e no estado. Esses percentuais aparecem na camada de uso (barras de textura e classe, no estado e no município selecionado), na ficha, na análise e no resumo em PDF. Na análise, a água disponível usada no balanço hídrico passa a ser a das áreas ocupadas pela cultura, e não a do município inteiro. A escala do mapa de solos (1:5.000.000) limita a interpretação ao nível regional.</p>
+<p>Para as culturas com mapa de uso e cobertura (soja e cana-de-açúcar da 1ª safra 2025/26; milho 2ª safra, sorgo e algodão da 2ª safra 2025, todos da Aprosoja-MS), a rotina automática sobrepõe os polígonos da cultura ao mapa de solos e à malha municipal, em projeção de áreas iguais, e soma a área (ha) por classe e por textura de solo, em cada município e no estado. Esses percentuais aparecem na camada de uso (barras de textura e classe, no estado e no município selecionado), na ficha, na análise e no resumo em PDF. Na análise, a água disponível usada no balanço hídrico passa a ser a das áreas ocupadas pela cultura, e não a do município inteiro. A escala do mapa de solos (1:5.000.000) limita a interpretação ao nível regional.</p>
 <h3>8b. Visão do estado</h3>
 <p>A ficha do estado agrega os municípios com dados: médias ponderadas pela área informada, distribuição por estádio, calendário das fases críticas a partir da curva estadual de semeadura e indicadores por região imediata. O clima é a média diária dos municípios com a cultura, ponderada pela área. A análise estadual roda o balanço hídrico de cada município, informa a fração da área com restrição hídrica (Ks &lt; 1) hoje e na previsão, e ordena os municípios pela pontuação de prioridade de vistoria.</p>
 <h3>9. Relatos de viagem</h3>
