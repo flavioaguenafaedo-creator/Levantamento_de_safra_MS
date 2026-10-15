@@ -1378,14 +1378,15 @@ const METODOLOGIA = `
 // RESUMO DA SAFRA EM PDF
 // =====================================================================
 $('bt-resumo').onclick = () => {
-  if (!PL) { abrirModal('Resumo da safra (PDF)', '<p>Conecte a pasta da equipe para gerar o resumo: ele depende das planilhas de plantio.</p>'); return; }
-  const itens = []; Object.keys(PL).sort().reverse().forEach(s => Object.keys(PL[s]).forEach(n => { if (Object.keys(PL[s][n].mun).length) itens.push([s, n]); }));
-  const c0 = cultAtual(), ini = c0?.inicio || addD(HOJE, -60);
+  if (!PL && !CANA) { abrirModal('Resumo da safra (PDF)', '<p>Conecte a pasta da equipe para gerar o resumo: ele depende das planilhas de plantio.</p>'); return; }
+  const itens = []; if (PL) Object.keys(PL).sort().reverse().forEach(s => Object.keys(PL[s]).forEach(n => { if (Object.keys(PL[s][n].mun).length) itens.push([s, n]); }));
+  if (CANA) itens.push(['', CANA_SEL]);
+  const c0 = cultAtual(), ini = (!c0?.semFenologia && c0?.inicio) || addD(HOJE, -60);
   abrirModal('Resumo da safra (PDF)', `<div class="form-pdf">
     <div class="datas"><div><label for="pdf-ini">Início do período</label><input type="date" id="pdf-ini" class="campo" value="${dISO(ini)}"></div>
     <div><label for="pdf-fim">Fim do período</label><input type="date" id="pdf-fim" class="campo" value="${dISO(HOJE)}"></div></div>
     <label>Culturas (marque quantas quiser)</label>
-    <div class="lista">${itens.map(([s, n], i) => `<label><input type="checkbox" class="pdf-c" data-s="${esc(s)}" data-n="${esc(n)}" ${s === safraSel && n === cultSel ? 'checked' : ''}> ${esc(n)} <span class="nota" style="margin:0">${esc(s)}</span></label>`).join('') || '<span class="nota">Nenhuma cultura com dados.</span>'}</div>
+    <div class="lista">${itens.map(([s, n], i) => `<label><input type="checkbox" class="pdf-c" data-s="${esc(s)}" data-n="${esc(n)}" ${(n === CANA_SEL ? cultSel === CANA_SEL : s === safraSel && n === cultSel) ? 'checked' : ''}> ${n === CANA_SEL ? 'Cana-de-açúcar <span class="nota" style="margin:0">área mapeada, sem fenologia</span>' : `${esc(n)} <span class="nota" style="margin:0">${esc(s)}</span>`}</label>`).join('') || '<span class="nota">Nenhuma cultura com dados.</span>'}</div>
     <div class="mini"><a id="pdf-todas">marcar todas</a><a id="pdf-nenhuma">desmarcar</a></div>
     <label>Incluir</label>
     <div class="lista"><label><input type="checkbox" id="pdf-mun" checked> Tabela completa por município</label><label><input type="checkbox" id="pdf-clima" checked> Clima do período</label><label><input type="checkbox" id="pdf-campo" checked> Fotos e relatos do período</label></div>
@@ -1430,6 +1431,48 @@ function resumoClima(dias, pesos) {   // pesos: {cd: área}
   }
   agg.dias = ds.length; agg.ini = ds[0]; agg.fim = ds.at(-1); return agg;
 }
+// seção da cana no PDF: área mapeada, solos, regiões, clima, água no solo hoje e campo (sem fenologia)
+function pdfCana(doc, {tit, par, tabela, novaPag, CINZA, opts, dias, ini, fim, secao}) {
+  const c = CANA, cid = 'cana', l = Object.entries(c.mun).filter(([cd]) => MUN_IDX[cd]).map(([cd, m]) => ({cd, m, f: MUN_IDX[cd]})), tot = l.reduce((t, x) => t + x.m.area, 0);
+  novaPag(); tit(`${secao++}. Cana-de-açúcar – área mapeada`, 13);
+  l.sort((a, b) => b.m.area - a.m.area);
+  par(`O mapeamento de uso e cobertura da Aprosoja-MS (safra 2025/26) indica ${n0(tot)} ha de cana-de-açúcar em ${l.length} municípios de Mato Grosso do Sul. Os cinco maiores, ${l.slice(0, 5).map(x => x.f.properties.NM_MUN).join(', ')}, somam ${n1(100 * l.slice(0, 5).reduce((t, x) => t + x.m.area, 0) / tot)}% da área. A cana não tem acompanhamento fenológico na planilha da equipe.`);
+  const reg = {}; l.forEach(x => { const r = x.f.properties.NM_RGI || '—'; (reg[r] ??= {n: 0, a: 0}); reg[r].n++; reg[r].a += x.m.area; });
+  tabela(['Região imediata', 'Municípios', 'Área (ha)', '% da cana do MS'], Object.entries(reg).sort((a, b) => b[1].a - a[1].a).map(([r, o]) => [r, o.n, n0(o.a), n1(100 * o.a / tot) + '%']));
+  const scP = soloCultura(cid, null);
+  if (scP) { tabela(['Textura do solo (áreas de cana mapeadas)', '% da área'], Object.entries(scP.textura).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, n1(v) + '%']), {tableWidth: 120});
+    tabela(['Classe de solo', '% da área'], Object.entries(scP.ordem).sort((a, b) => b[1] - a[1]).filter(([, v]) => v >= .1).map(([k, v]) => [k, n1(v) + '%']), {tableWidth: 120});
+    par(`Cruzamento de ${n0(scP.area)} ha de cana do mapa de uso da Aprosoja-MS com o mapa de solos IBGE/Embrapa 1:5.000.000.`, 7.5, CINZA); }
+  if (opts.clima) {
+    tit('Clima do período nas áreas de cana', 10.5);
+    const rc = resumoClima(dias, Object.fromEntries(l.map(x => [x.cd, x.m.area])));
+    if (!rc) par('Sem dados de clima no histórico para este período.', 9, CINZA);
+    else tabela(['Indicador', 'Valor'], [['Dias com dados', `${rc.dias} (${fmtD(deISO(rc.ini))} a ${fmtD(deISO(rc.fim))})`], ['Chuva acumulada (média ponderada pela área)', n0(rc.p) + ' mm'], ['Evapotranspiração de referência (ajustada pelas estações INMET)', n0(rc.et0) + ' mm'],
+      ['Chuva menos evapotranspiração', n0(rc.p - rc.et0) + ' mm'], ['Maior sequência de dias sem chuva (média da área)', rc.seco + (rc.seco === 1 ? ' dia' : ' dias')], ['Temperatura máxima registrada', n1(rc.txMax) + ' °C'], ['Temperatura mínima registrada', n1(rc.tnMin) + ' °C'],
+      ['Dias com mínima de 3 °C ou menos em algum município', String(rc.geada)]], {tableWidth: 150});
+    if (CL) { const cls = [0, 0, 0, 0], clsF = [0, 0, 0, 0]; let tw = 0; const pior = [];
+      for (const x of l) { const mc = CL.mun[x.cd]; if (!mc) continue; const bh = balancoHidrico(mc, cadMun(cid, x.cd), c, x.m, x.cd); if (bh.ksAtual == null) continue;
+        tw += x.m.area; cls[classeKs(bh.ksAtual)] += x.m.area; if (bh.ksMinFutCampo != null) clsF[classeKs(bh.ksMinFutCampo)] += x.m.area; pior.push([x.f.properties.NM_MUN, bh]); }
+      if (tw) { tit(`Água no solo na data do resumo (${fmtD(HOJE)})`, 10.5);
+        tabela(['Situação (balanço hídrico FAO-56)', '% da área hoje', '% da área no pior dia dos próximos 15'], CLS_AG.map((k, i) => [k.nome, n0(100 * cls[i] / tw) + '%', n0(100 * clsF[i] / tw) + '%']), {tableWidth: 150});
+        pior.sort((a, b) => (a[1].ksMinFutCampo ?? 1) - (b[1].ksMinFutCampo ?? 1) || a[1].atual - b[1].atual);
+        tabela(['Município (situação mais restrita)', 'Água no solo hoje', 'Ks hoje', 'Pior Ks em 15 dias'], pior.slice(0, 10).map(([nm, b]) => [nm, n0(b.atual) + '%', n2(b.ksAtual), n2(b.ksMinFutCampo)]), {tableWidth: 150});
+        par(`Kc médio anual de ${n2(KC_CANA)} (canaviais com idades misturadas), p = ${n2(P_CANA)}, raízes até ${PROF_CANA} cm; chuva e ET0 por município (modelo). Situação calculada na data de geração, independentemente do período escolhido.`, 7.5, CINZA); } }
+  }
+  if (opts.campo) {
+    const fts = FOTOS.filter(p => p.cult === cid && p.data >= ini && p.data <= addD(fim, 1)), rels = RELATOS.filter(r => r.cults.has(cid) && r.data >= ini && r.data <= addD(fim, 1));
+    tit('Informações de campo no período', 10.5);
+    par(`${fts.length} fotos de cana-de-açúcar e ${rels.length} relatos que citam a cultura.`, 9);
+    if (fts.length) { const pm = {}; fts.forEach(p => { const k = p.mun ? p.mun.properties.NM_MUN : 'Fora do MS'; pm[k] = (pm[k] || 0) + 1; });
+      tabela(['Município', 'Fotos'], Object.entries(pm).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, v]), {tableWidth: 90}); }
+    if (rels.length) tabela(['Data', 'Relato', 'Municípios citados'], rels.map(r => [fmtD(r.data), r.nome, [...r.muns].map(cd => MUN_IDX[cd]?.properties.NM_MUN).filter(Boolean).join(', ') || '—']), {columnStyles: {0: {cellWidth: 18}, 1: {cellWidth: 60}}});
+  }
+  if (opts.mun) {
+    tit('Área mapeada por município', 10.5);
+    tabela(['Município', 'Região imediata', 'Área de cana (ha)', '% da área do município', '% da cana do MS'], [...l].sort((a, b) => a.f.properties.NM_MUN.localeCompare(b.f.properties.NM_MUN, 'pt')).map(x => [x.f.properties.NM_MUN, x.f.properties.NM_RGI || '—', n0(x.m.area), x.f.properties.AREA_KM2 ? n1(100 * x.m.area / (x.f.properties.AREA_KM2 * 100)) + '%' : '—', n1(100 * x.m.area / tot) + '%']), {styles: {font: 'helvetica', fontSize: 7, cellPadding: 1}});
+  }
+  return secao;
+}
 async function gerarPDF(ini, fim, sel, opts) {
   await carregarScript(LIBS.jspdf); await carregarScript(LIBS.autotable);
   const {jsPDF} = window.jspdf, doc = new jsPDF({unit: 'mm', format: 'a4'}), W = 210, M = 15;
@@ -1453,20 +1496,24 @@ async function gerarPDF(ini, fim, sel, opts) {
   doc.setFont('helvetica', 'bold'); doc.setFontSize(17); doc.setTextColor(31, 42, 29); doc.text('Resumo da Safra – Mato Grosso do Sul', M, y); y += 8;
   doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(...CINZA);
   doc.text(`Período analisado: ${fmtDL(ini)} a ${fmtDL(fim)}   ·   Gerado em ${new Date().toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'})}`, M, y); y += 5;
-  doc.text(`Culturas: ${sel.map(([s, n]) => `${n} (${s})`).join(', ')}`, M, y, {maxWidth: W - 2 * M}); y += 9;
+  const cDe = (s, n) => n === CANA_SEL ? CANA : PL[s][n], rot = (s, n) => n === CANA_SEL ? 'Cana-de-açúcar' : `${n} (${s})`;
+  doc.text(`Culturas: ${sel.map(([s, n]) => rot(s, n)).join(', ')}`, M, y, {maxWidth: W - 2 * M}); y += 9;
   const dias = opts.clima ? await climaDiario(ini, fim) : {};
   // visão geral
   const linhasGeral = sel.map(([s, n]) => {
-    const c = PL[s][n], ja = semanaDe(c, ini), jb = semanaDe(c, fim);
+    const c = cDe(s, n);
+    if (c.semFenologia) return [rot(s, n) + ' – área mapeada', n0(Object.values(c.mun).reduce((t, m) => t + m.area, 0)), String(Object.keys(c.mun).length), '—', '—', '—', '—', '—'];
+    const ja = semanaDe(c, ini), jb = semanaDe(c, fim);
     const pa = mediaMS(c, m => acum(m.serie, ja)), pb = mediaMS(c, m => acum(m.serie, jb)), cr = mediaMS(c, m => pctCritico(c, m, jb));
     const area = Object.values(c.mun).reduce((t, m) => t + (m.area || 0), 0);
     return [`${n} (${s})`, area ? n0(area) : '—', String(Object.keys(c.mun).length), pa ? pa.v.toFixed(0) + '%' : '—', pb ? pb.v.toFixed(0) + '%' : '—', pa && pb ? '+' + (pb.v - pa.v).toFixed(0) + ' p.p.' : '—', cr ? cr.v.toFixed(0) + '%' : '—', fim > HOJE ? 'sim' : 'não'];
   });
   tit('1. Visão geral', 12);
   tabela(['Cultura (safra)', 'Área informada (ha)', 'Municípios', '% plantado no início', '% plantado no fim', 'Avanço', '% em fase crítica no fim', 'Fim projetado?'], linhasGeral);
-  par('Percentuais do estado ponderados pela área estimada informada na planilha (média simples quando a área não foi informada). Fases críticas e estádios são projeções pelo calendário médio da aba Parâmetros.', 8, CINZA);
+  par('Percentuais do estado ponderados pela área estimada informada na planilha (média simples quando a área não foi informada). Fases críticas e estádios são projeções pelo calendário médio da aba Parâmetros.' + (CANA && sel.some(([, n]) => n === CANA_SEL) ? ' Cana-de-açúcar: área do mapeamento de uso e cobertura da Aprosoja-MS (safra 2025/26), sem acompanhamento fenológico.' : ''), 8, CINZA);
   let secao = 2;
   for (const [s, n] of sel) {
+    if (n === CANA_SEL) { secao = pdfCana(doc, {tit, par, tabela, novaPag, M, W, CINZA, opts, dias, ini, fim, secao}); continue; }
     const c = PL[s][n], ja = Math.max(1, semanaDe(c, ini)), jb = semanaDe(c, fim), cid = c.cid;
     novaPag(); tit(`${secao++}. ${n} – safra ${s}`, 13);
     // curva do estado
@@ -1530,6 +1577,7 @@ async function gerarPDF(ini, fim, sel, opts) {
     }
   }
   novaPag(); tit(`${secao}. Notas metodológicas`, 12);
+  if (sel.some(([, n]) => n === CANA_SEL)) par(`Cana-de-açúcar: área por município do mapeamento de uso e cobertura da Aprosoja-MS (safra 2025/26); sem acompanhamento fenológico. Balanço hídrico FAO-56 com Kc médio anual de ${n2(KC_CANA)}, p = ${n2(P_CANA)} e raízes até ${PROF_CANA} cm (convenções do painel).`, 9);
   par('Fonte da evolução do plantio: planilha semanal da SEGEO-MS. Projeção fenológica pelo calendário médio (dias após a semeadura) da aba Parâmetros, sem considerar graus-dia. Clima por município no ponto central: histórico permanente com reanálise ERA5 (Copernicus/ECMWF, via Open-Meteo), complementado pela análise e previsão de modelos numéricos (Open-Meteo). Fotos e relatos: pasta da equipe no ConabCloud. Os indicadores apontam situações a verificar; não representam estimativa oficial de área, produtividade ou produção, e associações entre indicadores não implicam causa.', 9);
   const tot = doc.getNumberOfPages();
   for (let i = 1; i <= tot; i++) { doc.setPage(i); doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(...CINZA);
