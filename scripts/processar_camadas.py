@@ -29,6 +29,24 @@ CRS_PADRAO = "EPSG:4674"  # SIRGAS 2000, usado quando o .prj está ausente
 
 log = []
 
+# Só reprocessa quando algum arquivo de entrada (ou este script) mudou: a rotina diária roda para o clima
+# e não precisa refazer os mapas (pastagem e vegetação levam mais de 10 minutos).
+import hashlib
+def _assinatura():
+    h = hashlib.md5()
+    for p in sorted(list(ENT.rglob("*")) + [Path(__file__)]):
+        if p.is_file() and not any(x in p.parts for x in ("fotos", "relatos", "clima_inmet", "plantio")):
+            h.update(str(p.relative_to(RAIZ)).encode()); h.update(p.read_bytes())
+    return h.hexdigest()
+ASSINATURA = _assinatura()
+try:
+    _ant = json.loads((SAI / "manifesto.json").read_text(encoding="utf-8")).get("assinatura_entrada")
+except Exception:
+    _ant = None
+if _ant == ASSINATURA and "--forcar" not in sys.argv:
+    print("Arquivos de entrada sem mudança desde o último processamento: camadas mantidas.")
+    sys.exit(0)
+
 
 def corrigir_prj(caminho: Path):
     """.prj com acento em Latin-1 (ex.: "Cônica") quebra a leitura: regrava em ASCII."""
@@ -170,6 +188,7 @@ for f in shps("solos")[:1]:
 CODIGOS_USO = {"SOJ": "Soja", "CAN": "Cana-de-açúcar", "MIL": "Milho", "PST": "Pastagem", "REM": "Remanescente/vegetação",
                "EUC": "Eucalipto", "PIN": "Pinus", "SER": "Seringueira", "OUT": "Outros usos",
                "SGO": "Sorgo", "ALG": "Algodão", "MTO": "Milheto"}
+CULTURAS_USO = {"Soja", "Cana-de-açúcar", "Milho", "Milho 1ª safra", "Milho 2ª safra", "Algodão", "Arroz", "Feijão", "Sorgo", "Trigo", "Aveia", "Amendoim"}
 USO_BRUTO = []
 CLASSES_USO = {}          # camada -> classes (o painel acha o mapa de cada cultura por aqui)
 for f in shps("uso_solo"):
@@ -178,22 +197,30 @@ for f in shps("uso_solo"):
     c = coluna(g, "UCS", "CLASSE", "CLASS", "USO", "CULTURA", "DESCRICAO")
     # código (SOJ, MIL...) vira nome; nome já escrito por extenso (ex.: "Milho 2ª safra") é mantido
     classe = g[c].astype(str).str.strip().map(lambda v: CODIGOS_USO.get(v.upper(), v)) if c else f.stem
-    g = g.assign(classe=classe)[["classe", "geometry"]]
-    USO_BRUTO.append((f.name, g.copy()))
-    # recorte por município: uma feição por classe e município (o painel pinta a água no solo sobre as lavouras de cada município)
+    c_area = coluna(g, "AREA_HA", "HECTARE", "AREA")
+    g = g.assign(classe=classe)
+    # área oficial do mapeamento (atributo), quando existe; senão a da geometria. Mantida mesmo após a simplificação.
     EQ = "ESRI:102033"
+    g["_a_geo"] = g.to_crs(EQ).area / 1e4
+    g["_a_ref"] = pd.to_numeric(g[c_area], errors="coerce").fillna(g["_a_geo"]) if c_area else g["_a_geo"]
+    g = g[["classe", "_a_geo", "_a_ref", "geometry"]]
+    USO_BRUTO.append((f.name, g[["classe", "geometry"]].copy()))
+    # recorte por município: uma feição por classe e município (o painel pinta a água no solo sobre as lavouras de cada município)
     g = gpd.overlay(g.to_crs(EQ), municipios[["CD_MUN", "geometry"]].to_crs(EQ), how="intersection", keep_geom_type=True)
-    g["area_ha"] = g.area / 1e4                                    # área em ha (projeção equivalente) antes de simplificar
+    # área de cada pedaço = área oficial do polígono × fração dele que cai no município
+    g["area_ha"] = (g.area / 1e4) / g["_a_geo"].where(g["_a_geo"] > 0) * g["_a_ref"]
+    g["area_ha"] = g["area_ha"].fillna(g.area / 1e4)
     g = g.dissolve(["classe", "CD_MUN"], as_index=False, aggfunc={"area_ha": "sum"}).to_crs(4326)
     g["CD_MUN"] = g["CD_MUN"].astype(str).str.replace(r"\.0$", "", regex=True)
     g["area_ha"] = g["area_ha"].round(0)
-    salvar(g, f"uso_{f.stem.lower()}", TOL_USO)
+    agricola = bool(set(g["classe"]) & CULTURAS_USO)
+    # pastagem, vegetação etc. são só referência visual: geometria mais leve (~250 m, coordenadas com 4 casas)
+    salvar(g, f"uso_{f.stem.lower()}", TOL_USO) if agricola else salvar(g, f"uso_{f.stem.lower()}", TOL_USO * 2.5, decimais=4)
     CLASSES_USO[f"uso_{f.stem.lower()}"] = sorted(g["classe"].unique().tolist())
 
 
 # ------------------------------------------------- solos ocupados por cada cultura (uso x solos x municípios)
 # Área (ha, projeção equivalente) de cada classe de uso agrícola por classe e textura de solo, por município e no estado.
-CULTURAS_USO = {"Soja", "Cana-de-açúcar", "Milho", "Milho 2ª safra", "Algodão", "Arroz", "Feijão", "Sorgo", "Trigo", "Aveia", "Amendoim"}
 if SOLOS_MS is not None and USO_BRUTO:
     EQ = "ESRI:102033"
     unid = gpd.overlay(SOLOS_MS[["ordem", "textura", "geometry"]].to_crs(EQ),
@@ -235,6 +262,7 @@ manifesto = {
     "atualizado_em": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     "camadas": camadas,
     "classes": CLASSES_USO,
+    "assinatura_entrada": ASSINATURA,
     "log": log,
 }
 (SAI / "manifesto.json").write_text(json.dumps(manifesto, ensure_ascii=False, indent=2), encoding="utf-8")

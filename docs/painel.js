@@ -99,7 +99,7 @@ const SOLO_MUN = {};
 let dadosSolo = null, modoSolo = 'ordem';
 
 // ------------------------------------------------------------------ registro de camadas
-const GRUPOS = [['lav', 'Lavouras'], ['clima', 'Clima'], ['campo', 'Fotos de campo'], ['uso', 'Uso e cobertura do solo'], ['solo', 'Solos'], ['ref', 'Referência']];
+const GRUPOS = [['lav', 'Lavouras'], ['clima', 'Clima'], ['campo', 'Fotos de campo'], ['uso', 'Uso do solo: culturas'], ['uso2', 'Uso do solo: outras ocupações'], ['solo', 'Solos'], ['ref', 'Referência']];
 const CAM = {};
 function defCam(id, cfg) { CAM[id] = Object.assign({id, op: 1, on: false, layer: null}, cfg); }
 const OPC = id => CAM[id] ? CAM[id].op : 1;
@@ -222,7 +222,8 @@ function soloDoMunicipio(f) {
 }
 
 // ------------------------------------------------------------------ uso e cobertura (camadas publicadas pela rotina)
-const CORES_USO = {"Soja": "#e0a526", "Cana-de-açúcar": "#3f9a5a", "Milho": "#d4694a", "Pastagem": "#c9d99a", "Remanescente/vegetação": "#2f5d3a", "Eucalipto": "#6d8fbf", "Pinus": "#a37fbf", "Seringueira": "#8a6f4e", "Outros usos": "#bdbdbd", "Milho 2ª safra": "#c98b14", "Sorgo": "#a83a2a", "Algodão": "#7d8fa3", "Milheto": "#b9a183"};
+const CORES_USO = {"Soja": "#e0a526", "Cana-de-açúcar": "#3f9a5a", "Milho": "#d4694a", "Pastagem": "#c9d99a", "Remanescente/vegetação": "#2f5d3a", "Eucalipto": "#6d8fbf", "Pinus": "#a37fbf", "Seringueira": "#8a6f4e", "Outros usos": "#bdbdbd", "Milho 2ª safra": "#c98b14", "Sorgo": "#a83a2a", "Algodão": "#7d8fa3", "Milheto": "#b9a183",
+  "Milho 1ª safra": "#e0a526", "Vegetação remanescente": "#2f5d3a"};
 const PALETA = ["#e3b23c", "#4f8a3c", "#9ccf7f", "#d4694a", "#6d8fbf", "#a37fbf", "#c4c4a0", "#3f6f6a"];
 // nome legível da camada de uso: classes do manifesto + safra tirada do nome do arquivo
 // ex.: uso_soja_2025-26 -> "Soja 2025/26"; uso_milho_2a_safra_2025 -> "Milho 2ª safra 2025"; uso_sorgo_2a_safra_2025 -> "Sorgo 2ª safra 2025"
@@ -235,11 +236,11 @@ function rotuloUso(nome) {
   if (s1) return `${txt} ${s1[1]}/${s1[2].slice(-2)}`;
   return ano ? `${txt} ${ano[1]}` : txt;
 }
-function camUso(nome) {
+function camUso(nome, grupo = 'uso') {
   const id = 'u_' + nome, rot = rotuloUso(nome);
   let classes = null;
   const cor = c => CORES_USO[c] || PALETA[(classes || []).indexOf(c) % PALETA.length];
-  defCam(id, {grupo: 'uso', nome: rot, op: .85,
+  defCam(id, {grupo, nome: rot, op: .85,
     estilo: f => ({pane: 'uso', fillColor: cor(f.properties.classe || ''), fillOpacity: OPC(id), weight: 0}),
     montar: async () => { const d = await pegar(`dados/${nome}.geojson`); if (!d) return null;
       USO_GEO[nome] = d; classes = [...new Set(d.features.map(f => f.properties.classe))];
@@ -249,7 +250,7 @@ function camUso(nome) {
       return L.geoJSON(d, {style: CAM[id].estilo, interactive: false}); },
     sub: () => `<div class="leg">${CAM[id].legenda || ''}</div>${solosNaCamada(classes)}<div class="nota">Fonte: ${esc(fonteUso(nome))}.</div>`});
 }
-function fonteUso(nome) { return /soja|cana|milho|sorgo|algod|ms2\d/i.test(nome) ? `mapeamento de uso e cobertura da Aprosoja-MS${/2a_safra/i.test(nome) ? ' (2ª safra)' : ''}` : 'mapeamento de uso e cobertura enviado à SEGEO-MS'; }
+function fonteUso(nome) { return /soja|cana|milho|sorgo|algod|pastagem|vegetacao|remanescente|eucalipto|outros_usos|seringueira|pinus|ms2\d/i.test(nome) ? `mapeamento de uso e cobertura da Aprosoja-MS${/2a_safra/i.test(nome) ? ' (2ª safra)' : ''}` : 'mapeamento de uso e cobertura enviado à SEGEO-MS'; }
 // geometrias de uso já baixadas (uma feição por classe e município) e busca do mapa de uma cultura
 const USO_GEO = {};
 function arquivoUso(cid) {   // nome da camada uso_* que tem a cultura (o mais recente pelo nome)
@@ -1359,7 +1360,7 @@ const METODOLOGIA = `
 <table><tr><th>Informação</th><th>Fonte</th><th>Atualização</th></tr>
 <tr><td>Limites municipais</td><td>IBGE, malha municipal 2025 (SIRGAS 2000)</td><td>Fixa</td></tr>
 <tr><td>Solos (classe e textura)</td><td>Mapa de Solos do Brasil, IBGE/Embrapa, escala 1:5.000.000</td><td>Fixa</td></tr>
-<tr><td>Uso e cobertura (soja, cana, milho 2ª safra, sorgo, algodão)</td><td>Mapeamentos vetoriais de uso e cobertura da Aprosoja-MS: 1ª safra 2025/26 (arquivo MS26S1UCS: soja e cana-de-açúcar) e 2ª safra 2025 (arquivo MS25S2: milho 2ª safra, sorgo e algodão). Do mapa de 2ª safra foram extraídas só as culturas anuais acompanhadas pela Conab; milheto, pastagem, vegetação, eucalipto e outros usos ficaram de fora</td><td>Quando novos arquivos são enviados</td></tr>
+<tr><td>Uso e cobertura (soja, cana, milho 2ª safra, sorgo, algodão)</td><td>Mapeamentos vetoriais de uso e cobertura da Aprosoja-MS: 1ª safra 2025/26 (arquivo MS26S1UCS: soja e cana-de-açúcar) e 2ª safra 2025 (arquivo MS25S2: milho 2ª safra, sorgo e algodão). Do mapa de 2ª safra foram extraídas só as culturas anuais acompanhadas pela Conab (milheto e demais usos ficaram de fora). Do mapa de 1ª safra também foram extraídos, só como referência visual, milho 1ª safra, pastagem, vegetação remanescente, eucalipto, pinus, seringueira e outros usos; pastagem e vegetação remanescente foram simplificadas em 100 m para caber no repositório (as áreas exibidas são as do mapeamento original)</td><td>Quando novos arquivos são enviados</td></tr>
 <tr><td>Rodovias federais e estaduais</td><td>Base vetorial de rodovias de MS fornecida à SEGEO-MS (nome, jurisdição, revestimento, extensão)</td><td>Quando novos arquivos são enviados</td></tr>
 <tr><td>Evolução do plantio</td><td>Planilha semanal preenchida pelos técnicos da SEGEO-MS (% acumulado da área plantada por município)</td><td>Semanal, lida da pasta da equipe</td></tr>
 <tr><td>Previsão diária por município (16 dias)</td><td>Open-Meteo: média de seis modelos globais (ECMWF IFS, NOAA GFS, DWD ICON, CMC GEM, JMA e UK Met Office), no ponto central de cada município, com a faixa entre os modelos</td><td>Diária (06h)</td></tr>
@@ -1635,7 +1636,9 @@ $('busca').onchange = e => { const f = dadosMun?.features.find(x => norm(x.prope
   const lista = man?.camadas || [];
   if (lista.includes('infra_rodovias_federais')) camRodovia('rodfed', 'infra_rodovias_federais', 'Rodovias federais');
   if (lista.includes('infra_rodovias_estaduais')) camRodovia('rodest', 'infra_rodovias_estaduais', 'Rodovias estaduais');
-  lista.filter(c => c.startsWith('uso_')).sort((a, b) => (/2a_safra/.test(a) - /2a_safra/.test(b)) || rotuloUso(a).localeCompare(rotuloUso(b), 'pt')).forEach(camUso);   // 1ª safra antes da 2ª
+  // culturas anuais primeiro (1ª safra antes da 2ª), depois as demais ocupações (pastagem, vegetação, florestas plantadas, outros)
+  const ehCultura = n => (man?.classes?.[n] || [n.replace(/^uso_/, '')]).some(cl => { const c = culturaDe(cl); return c && c.id !== 'outra'; });
+  lista.filter(c => c.startsWith('uso_')).sort((a, b) => (ehCultura(b) - ehCultura(a)) || (/2a_safra/.test(a) - /2a_safra/.test(b)) || rotuloUso(a).localeCompare(rotuloUso(b), 'pt')).forEach(n => camUso(n, ehCultura(n) ? 'uso' : 'uso2'));
   lista.filter(c => c.startsWith('infra_') && !/rodovias_(federais|estaduais)/.test(c)).forEach(c => camRodovia('i_' + c, c, c.slice(6).replace(/_/g, ' ')));
   if (!solo) delete CAM.solo;
   renderCamadas();
