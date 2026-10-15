@@ -191,8 +191,17 @@ CODIGOS_USO = {"SOJ": "Soja", "CAN": "Cana-de-açúcar", "MIL": "Milho", "PST": 
 CULTURAS_USO = {"Soja", "Cana-de-açúcar", "Milho", "Milho 1ª safra", "Milho 2ª safra", "Algodão", "Arroz", "Feijão", "Sorgo", "Trigo", "Aveia", "Amendoim"}
 USO_BRUTO = []
 CLASSES_USO = {}          # camada -> classes (o painel acha o mapa de cada cultura por aqui)
+# mapas grandes podem vir divididos em partes (ex.: Pastagem_2025-26_parte1.shp, ..._parte2.shp): viram uma camada só
+import re
+GRUPOS_USO = {}
 for f in shps("uso_solo"):
-    g = ler(f)
+    GRUPOS_USO.setdefault(re.sub(r"_parte\d+$", "", f.stem, flags=re.I), []).append(f)
+for stem, arquivos in sorted(GRUPOS_USO.items()):
+    f = arquivos[0].with_name(stem + ".shp")
+    g = pd.concat([ler(a) for a in arquivos], ignore_index=True) if len(arquivos) > 1 else ler(arquivos[0])
+    g = gpd.GeoDataFrame(g, geometry="geometry", crs=4326)
+    if len(arquivos) > 1:
+        log.append(f"{stem}: {len(arquivos)} partes reunidas")
     g = gpd.clip(g[g.intersects(area_ms)], area_ms)
     c = coluna(g, "UCS", "CLASSE", "CLASS", "USO", "CULTURA", "DESCRICAO")
     # código (SOJ, MIL...) vira nome; nome já escrito por extenso (ex.: "Milho 2ª safra") é mantido
@@ -220,7 +229,7 @@ for f in shps("uso_solo"):
 
 
 # ------------------------------------------------- solos ocupados por cada cultura (uso x solos x municípios)
-# Área (ha, projeção equivalente) de cada classe de uso agrícola por classe e textura de solo, por município e no estado.
+# Área (ha, projeção equivalente) de cada classe de uso (culturas e demais ocupações) por classe e textura de solo, por município e no estado.
 if SOLOS_MS is not None and USO_BRUTO:
     EQ = "ESRI:102033"
     unid = gpd.overlay(SOLOS_MS[["ordem", "textura", "geometry"]].to_crs(EQ),
@@ -228,7 +237,7 @@ if SOLOS_MS is not None and USO_BRUTO:
     saida = {"descricao": "Área (ha) de cada cultura mapeada por classe e textura de solo. Solos: IBGE/Embrapa 1:5.000.000; uso: mapeamento Aprosoja-MS (dados/entrada/uso_solo).",
              "gerado": datetime.now(timezone.utc).isoformat(timespec="seconds"), "culturas": {}}
     for arq, g in USO_BRUTO:
-        for cl in sorted(set(g["classe"]) & CULTURAS_USO):
+        for cl in sorted(set(g["classe"])):          # todas as classes (culturas e demais ocupações)
             u = g[g["classe"] == cl].to_crs(EQ)
             x = gpd.overlay(u[["geometry"]], unid, how="intersection", keep_geom_type=True)
             x["ha"] = x.area / 1e4

@@ -265,15 +265,22 @@ async function usoDaCultura(cid) {
 function barraSolo(o, cores) {
   const it = Object.entries(o).filter(([, v]) => v >= .5).sort((a, b) => b[1] - a[1]);
   return `<div class="barra" style="height:12px">${it.map(([k, v]) => `<i title="${esc(k)}: ${v.toFixed(0)}%" style="width:${v}%;background:${cores[k] || '#bdbdbd'}"></i>`).join('')}</div>
-    <div class="leg" style="display:flex;flex-wrap:wrap;gap:0 10px">${it.slice(0, 4).map(([k, v]) => `<div><i style="background:${cores[k] || '#bdbdbd'}"></i>${esc(k)} ${v.toFixed(0)}%</div>`).join('')}</div>`;
+    <div class="leg" style="display:flex;flex-wrap:wrap;gap:0 10px">${it.filter(([, v]) => v >= 1).map(([k, v]) => `<div><i style="background:${cores[k] || '#bdbdbd'}"></i>${esc(k)} ${v.toFixed(0)}%</div>`).join('')}</div>`;
+}
+// solos ocupados por uma classe de uso (cultura ou outra ocupação), pelo nome da classe no solo_cultura.json
+function soloClasse(cl, cd) {
+  const o = SOLO_CULT?.culturas[cl]; if (!o) return null;
+  const r = cd ? o.mun[cd] : o.estado; if (!r || !r.area) return null;
+  const pct = x => Object.fromEntries(Object.entries(x).map(([k, v]) => [k, 100 * v / r.area]));
+  return {nome: cl, area: r.area, ordem: pct(r.ordem), textura: pct(r.textura)};
 }
 function solosNaCamada(classes) {
   if (!SOLO_CULT || !classes) return '';
-  return classes.map(cl => { const c = culturaDe(cl), r = c && soloCultura(c.id, null); if (!r) return '';
-    const cd = selecionado && selecionado !== ESTADO ? String(+selecionado.properties.CD_MUN) : null, rm = cd ? soloCultura(c.id, cd) : null;
+  return classes.map(cl => { const r = soloClasse(cl, null); if (!r) return '';
+    const cd = selecionado && selecionado !== ESTADO ? String(+selecionado.properties.CD_MUN) : null, rm = cd ? soloClasse(cl, cd) : null;
     return `<div style="margin-top:8px;font-size:12px"><b>Solos sob ${esc(cl.toLowerCase())}</b> · MS, ${n0(r.area)} ha</div>
       <div class="nota" style="margin:2px 0 0">Textura do solo</div>${barraSolo(r.textura, CORES_TEX)}<div class="nota" style="margin:2px 0 0">Classe de solo</div>${barraSolo(r.ordem, CORES_ORDEM)}
-      ${rm ? `<div style="margin-top:6px;font-size:12px"><b>${esc(selecionado.properties.NM_MUN)}</b> · ${n0(rm.area)} ha</div>${barraSolo(rm.textura, CORES_TEX)}${barraSolo(rm.ordem, CORES_ORDEM)}` : '<div class="nota">Selecione um município para ver os solos sob a cultura nele.</div>'}`; }).join('');
+      ${rm ? `<div style="margin-top:6px;font-size:12px"><b>${esc(selecionado.properties.NM_MUN)}</b> · ${n0(rm.area)} ha</div><div class="nota" style="margin:2px 0 0">Textura do solo</div>${barraSolo(rm.textura, CORES_TEX)}<div class="nota" style="margin:2px 0 0">Classe de solo</div>${barraSolo(rm.ordem, CORES_ORDEM)}` : `<div class="nota">Selecione um município para ver os solos sob ${esc(cl.toLowerCase())} nele.</div>`}`; }).join('');
 }
 
 // =====================================================================

@@ -1,5 +1,5 @@
 {
-  "atualizado_em": "2026-10-15T15:24:12+00:00",
+  "atualizado_em": "2026-10-15T16:20:08+00:00",
   "camadas": [
     "infra_rodovias_estaduais",
     "infra_rodovias_federais",
@@ -12,10 +12,12 @@
     "uso_milho_1a_safra_2025-26",
     "uso_milho_2a_safra_2025",
     "uso_outros_usos_2025-26",
+    "uso_pastagem_2025-26",
     "uso_pinus_2025-26",
     "uso_seringueira_2025-26",
     "uso_soja_2025-26",
-    "uso_sorgo_2a_safra_2025"
+    "uso_sorgo_2a_safra_2025",
+    "uso_vegetacao_remanescente_2025-26"
   ],
   "classes": {
     "uso_algodao_2a_safra_2025": [
@@ -36,6 +38,9 @@
     "uso_outros_usos_2025-26": [
       "Outros usos"
     ],
+    "uso_pastagem_2025-26": [
+      "Pastagem"
+    ],
     "uso_pinus_2025-26": [
       "Pinus"
     ],
@@ -47,9 +52,12 @@
     ],
     "uso_sorgo_2a_safra_2025": [
       "Sorgo"
+    ],
+    "uso_vegetacao_remanescente_2025-26": [
+      "Vegetação remanescente"
     ]
   },
-  "assinatura_entrada": "647206ff02421d0bb329dd19c37fcfd0",
+  "assinatura_entrada": "45c86618df614896015846c411ca1c4c",
   "log": [
     "municipios: 79 feições, 790 KB",
     "limite_ms: gerado a partir dos municípios",
@@ -62,16 +70,26 @@
     "uso_milho_1a_safra_2025-26: 31 feições, 20 KB",
     "uso_milho_2a_safra_2025: 75 feições, 2,692 KB",
     "uso_outros_usos_2025-26: 79 feições, 1,980 KB",
+    "Pastagem_2025-26: 4 partes reunidas",
+    "uso_pastagem_2025-26: 79 feições, 14,330 KB",
     "uso_pinus_2025-26: 6 feições, 3 KB",
     "uso_seringueira_2025-26: 29 feições, 38 KB",
     "uso_soja_2025-26: 78 feições, 5,534 KB",
     "uso_sorgo_2a_safra_2025: 75 feições, 769 KB",
+    "Vegetacao_remanescente_2025-26: 4 partes reunidas",
+    "uso_vegetacao_remanescente_2025-26: 79 feições, 15,860 KB",
     "solo_cultura: Algodão (Algodao_2a_safra_2025.shp) 29,746 ha cruzados com solos",
     "solo_cultura: Cana-de-açúcar (Cana_2025-26.shp) 991,416 ha cruzados com solos",
+    "solo_cultura: Eucalipto (Eucalipto_2025-26.shp) 1,967,284 ha cruzados com solos",
     "solo_cultura: Milho 1ª safra (Milho_1a_safra_2025-26.shp) 5,475 ha cruzados com solos",
     "solo_cultura: Milho 2ª safra (Milho_2a_safra_2025.shp) 2,134,018 ha cruzados com solos",
+    "solo_cultura: Outros usos (Outros_usos_2025-26.shp) 451,474 ha cruzados com solos",
+    "solo_cultura: Pastagem (Pastagem_2025-26.shp) 16,325,989 ha cruzados com solos",
+    "solo_cultura: Pinus (Pinus_2025-26.shp) 5,812 ha cruzados com solos",
+    "solo_cultura: Seringueira (Seringueira_2025-26.shp) 25,119 ha cruzados com solos",
     "solo_cultura: Soja (Soja_2025-26.shp) 4,591,229 ha cruzados com solos",
     "solo_cultura: Sorgo (Sorgo_2a_safra_2025.shp) 395,277 ha cruzados com solos",
+    "solo_cultura: Vegetação remanescente (Vegetacao_remanescente_2025-26.shp) 10,419,110 ha cruzados com solos",
     "Rodovias_Estaduais.shp: texto relido em UTF-8 (codificação declarada incorreta)",
     "infra_rodovias_estaduais: 125 feições, 221 KB",
     "Rodovias_Federais.shp: texto relido em UTF-8 (codificação declarada incorreta)",
