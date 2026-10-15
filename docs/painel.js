@@ -735,6 +735,7 @@ defCam('fotos', {grupo: 'campo', nome: 'Fotos de campo', desab: true, st: 'conec
 // =====================================================================
 // RELATOS DE VIAGEM (docx, txt, md, pdf)
 // =====================================================================
+// palavras-chave (texto sem acento, minúsculo) para identificar as culturas citadas num relato
 const PALAVRAS_CULT = {soja: ['soja'], milho1: ['milho'], milho2: ['milho', 'safrinha'], sorgo: ['sorgo'], amendoim: ['amendoim'], arroz: ['arroz'],
   feijao1: ['feijao'], feijao2: ['feijao'], algodao: ['algodao'], trigo: ['trigo'], aveia: ['aveia'], cana: ['cana-de-acucar', 'cana de acucar', 'canavial', 'cana ']};
 async function extrairTexto(a) {
@@ -764,11 +765,16 @@ async function carregarRelatos(lista) {
       const f = await a.obter(), texto = (await extrairTexto(a)).replace(/\r/g, ''); if (!texto.trim()) continue;
       const sa = semAcento(texto), tn = norm(texto);
       const muns = nomesMun.filter(x => x.re.test(sa)).map(x => x.cd);
-      const cults = Object.entries(PALAVRAS_CULT).filter(([, ps]) => ps.some(p => tn.includes(p))).map(([k]) => k);
-      RELATOS.push({caminho: a.caminho, nome: a.caminho.split('/').pop(), data: dataDoRelato(a.caminho.split('/').pop(), texto, f), texto, muns: new Set(muns), cults: new Set(cults)});
+      // subpasta define o grupo: ".../Cana/..." = relato de cana; ".../Graos/..." = grãos e algodão (não conta citações de cana)
+      const pastas = a.caminho.split('/').slice(0, -1).map(norm), grupo = pastas.some(x => /(^|[^a-z])cana/.test(x)) ? 'cana' : pastas.some(x => /graos|grao/.test(x)) ? 'graos' : null;
+      let cults = Object.entries(PALAVRAS_CULT).filter(([, ps]) => ps.some(p => tn.includes(p))).map(([k]) => k);
+      if (grupo === 'cana') cults = ['cana']; else if (grupo === 'graos') cults = cults.filter(k => k !== 'cana');
+      RELATOS.push({caminho: a.caminho, nome: a.caminho.split('/').pop(), data: dataDoRelato(a.caminho.split('/').pop(), texto, f), texto, grupo, muns: new Set(muns), cults: new Set(cults)});
     } catch (e) { console.warn('relato não lido', a.caminho, e); }
   }
   RELATOS.sort((p, q) => q.data - p.data);
+  const ng = g => RELATOS.filter(r => r.grupo === g).length, ng0 = RELATOS.filter(r => !r.grupo).length;
+  $('st-pasta').innerHTML = $('st-pasta').innerHTML.replace(/Relatos: \d+/, `Relatos: ${RELATOS.length} (grãos ${ng('graos')} · cana ${ng('cana')}${ng0 ? ` · fora das subpastas ${ng0}` : ''})`);
   if (selecionado) abrirFicha(selecionado, true);
 }
 function trechos(rel, nomeMun, cid, max = 2) {
@@ -1363,7 +1369,7 @@ const METODOLOGIA = `
 <h3>8b. Visão do estado</h3>
 <p>A ficha do estado agrega os municípios com dados: médias ponderadas pela área informada, distribuição por estádio, calendário das fases críticas a partir da curva estadual de semeadura e indicadores por região imediata. O clima é a média diária dos municípios com a cultura, ponderada pela área. A análise estadual roda o balanço hídrico de cada município, informa a fração da área com restrição hídrica (Ks &lt; 1) hoje e na previsão, e ordena os municípios pela pontuação de prioridade de vistoria.</p>
 <h3>9. Relatos de viagem</h3>
-<p>São lidos arquivos .docx, .pdf, .txt e .md. A data vem do nome do arquivo (AAAA-MM-DD), da primeira data no texto ou da data de modificação. Os municípios citados são identificados pelo nome (com inicial maiúscula, ignorando acentos) e as culturas por palavras-chave. A análise mostra os trechos que citam o município e a cultura.</p>
+<p>São lidos arquivos .docx, .pdf, .txt e .md da pasta de relatos. A subpasta define o grupo: relatos dentro de uma subpasta “Cana” são atribuídos à cana-de-açúcar; relatos dentro de “Grãos” (que inclui algodão) têm as culturas identificadas por palavras-chave, sem contar citações de cana. Fora dessas subpastas, todas as culturas são identificadas por palavras-chave. A data vem do nome do arquivo (AAAA-MM-DD), da primeira data no texto ou da data de modificação. Os municípios citados são identificados pelo nome (com inicial maiúscula, ignorando acentos) e as culturas por palavras-chave. A análise mostra os trechos que citam o município e a cultura.</p>
 <h3>10. Análise agronômica automática e prioridade de vistoria</h3>
 <p>O texto da análise é montado por regras explícitas a partir dos itens acima. A prioridade de vistoria soma pontos para: área em fases críticas nas próximas três semanas (≥ 30%), restrição hídrica atual (Ks &lt; 1), calor ≥ 35 °C ou déficit hídrico previsto durante fases críticas, risco de geada em culturas sensíveis, chuva elevada na maturação ou colheita, semeadura atrasada em relação ao estado e ausência de informação de campo nos últimos 30 dias (Alta ≥ 5 pontos; Média 3–4; Baixa ≤ 2).</p>
 <h3>11. Resumo da safra (PDF)</h3>
