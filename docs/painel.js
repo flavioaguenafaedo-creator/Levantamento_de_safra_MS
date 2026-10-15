@@ -99,7 +99,7 @@ const SOLO_MUN = {};
 let dadosSolo = null, modoSolo = 'ordem';
 
 // ------------------------------------------------------------------ registro de camadas
-const GRUPOS = [['lav', 'Lavouras'], ['clima', 'Clima'], ['campo', 'Campo'], ['uso', 'Uso e cobertura do solo'], ['solo', 'Solos'], ['ref', 'Referência']];
+const GRUPOS = [['lav', 'Lavouras'], ['clima', 'Clima'], ['campo', 'Fotos de campo'], ['uso', 'Uso e cobertura do solo'], ['solo', 'Solos'], ['ref', 'Referência']];
 const CAM = {};
 function defCam(id, cfg) { CAM[id] = Object.assign({id, op: 1, on: false, layer: null}, cfg); }
 const OPC = id => CAM[id] ? CAM[id].op : 1;
@@ -203,7 +203,7 @@ function htmlSoloCultura(cd) {
   if (!SOLO_CULT) return '';
   const tb = (o, cores) => Object.entries(o).filter(([, v]) => v >= .5).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td><i style="background:${cores[k] || '#bdbdbd'}"></i>${esc(k)}</td><td>${v.toFixed(0)}%</td></tr>`).join('');
   const blocos = Object.keys(SOLO_CULT.culturas).map(n => { const c = culturaDe(n); const r = soloCultura(c?.id, cd); if (!r) return '';
-    return `<div class="nota" style="margin-top:8px;color:var(--tinta)"><b>${esc(n)}</b> · ${n0(r.area)} ha mapeados</div><table>${tb(r.textura, CORES_TEX)}</table><table style="margin-top:4px">${tb(r.ordem, CORES_ORDEM)}</table>`; }).join('');
+    return `<div class="nota" style="margin-top:8px;color:var(--tinta)"><b>${esc(n)}</b> · ${n0(r.area)} ha mapeados</div><div class="subt">Textura do solo</div><table>${tb(r.textura, CORES_TEX)}</table><div class="subt">Classe de solo</div><table>${tb(r.ordem, CORES_ORDEM)}</table>`; }).join('');
   return blocos ? `<h3>Solos ocupados pelas culturas mapeadas</h3>${blocos}<div class="nota">Cruzamento dos mapas de uso da Aprosoja-MS com o mapa de solos 1:5.000.000 (% da área de cada cultura).</div>` : '';
 }
 function soloDoMunicipio(f) {
@@ -260,7 +260,7 @@ function solosNaCamada(classes) {
   return classes.map(cl => { const c = culturaDe(cl), r = c && soloCultura(c.id, null); if (!r) return '';
     const cd = selecionado && selecionado !== ESTADO ? String(+selecionado.properties.CD_MUN) : null, rm = cd ? soloCultura(c.id, cd) : null;
     return `<div style="margin-top:8px;font-size:12px"><b>Solos sob ${esc(cl.toLowerCase())}</b> · MS, ${n0(r.area)} ha</div>
-      <div class="nota" style="margin:2px 0 0">Textura</div>${barraSolo(r.textura, CORES_TEX)}<div class="nota" style="margin:2px 0 0">Classe</div>${barraSolo(r.ordem, CORES_ORDEM)}
+      <div class="nota" style="margin:2px 0 0">Textura do solo</div>${barraSolo(r.textura, CORES_TEX)}<div class="nota" style="margin:2px 0 0">Classe de solo</div>${barraSolo(r.ordem, CORES_ORDEM)}
       ${rm ? `<div style="margin-top:6px;font-size:12px"><b>${esc(selecionado.properties.NM_MUN)}</b> · ${n0(rm.area)} ha</div>${barraSolo(rm.textura, CORES_TEX)}${barraSolo(rm.ordem, CORES_ORDEM)}` : '<div class="nota">Selecione um município para ver os solos sob a cultura nele.</div>'}`; }).join('');
 }
 
@@ -712,7 +712,7 @@ async function carregarFotos(lista) {
   if (selecionado) abrirFicha(selecionado, true);
 }
 const fotoVisivel = p => CAM.fotos.seguir ? (cultAtual() ? p.cult === cultAtual().cid : true) : (!fotoFiltro || fotoFiltro.has(p.cult));
-defCam('fotos', {grupo: 'campo', nome: 'Fotos de campo', desab: true, st: 'conecte a pasta', seguir: true,
+defCam('fotos', {grupo: 'campo', nome: 'Mostrar fotos no mapa', desab: true, st: 'conecte a pasta', seguir: true,
   montar: async () => L.layerGroup(FOTOS.filter(fotoVisivel).map(p => {
     const cult = CULT[p.cult] || OUTRA;
     const mk = L.marker([p.lat, p.lon], {opacity: OPC('fotos'), riseOnHover: true,
@@ -1084,11 +1084,11 @@ function htmlGeral(f) {
   if (mc) h += htmlClimaResumo(mc, c && m ? bhCultura(c)?.[cd] : null, c);
   const sc = c ? soloCultura(cid, cd) : null, so = soloDoMunicipio(f);
   const tb = (o, cores) => Object.entries(o).filter(([, v]) => v >= .5).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td><i style="background:${cores[k] || '#bdbdbd'}"></i>${esc(k)}</td><td>${v.toFixed(0)}%</td></tr>`).join('');
-  if (sc) h += `<h3>Solos sob ${esc(c.nome.toLowerCase())} (${n0(sc.area)} ha mapeados)</h3><table>${tb(sc.textura, CORES_TEX)}</table><table style="margin-top:6px">${tb(sc.ordem, CORES_ORDEM)}</table><div class="nota">Mapa de uso da Aprosoja-MS × solos 1:5.000.000. Água disponível ~${(sc.cad * profRaiz(c) / 60).toFixed(0)} mm em ${profRaiz(c)} cm.</div>`;
-  else if (so) h += `<h3>Solos do município (1:5.000.000)</h3><table>${tb(so.ordem, CORES_ORDEM)}</table><table style="margin-top:6px">${tb(so.textura, CORES_TEX)}</table><div class="nota">${c ? `${esc(c.nome)} não tem mapa de uso: valores do município inteiro. ` : ''}Água disponível estimada: ~${so.cad.toFixed(0)} mm em 60 cm (pela textura).</div>`;
+  if (sc) h += `<h3>Solos sob ${esc(c.nome.toLowerCase())} (${n0(sc.area)} ha mapeados)</h3><div class="subt">Textura do solo</div><table>${tb(sc.textura, CORES_TEX)}</table><div class="subt">Classe de solo</div><table>${tb(sc.ordem, CORES_ORDEM)}</table><div class="nota">Mapa de uso da Aprosoja-MS × solos 1:5.000.000. Água disponível ~${(sc.cad * profRaiz(c) / 60).toFixed(0)} mm em ${profRaiz(c)} cm.</div>`;
+  else if (so) h += `<h3>Solos do município (1:5.000.000)</h3><div class="subt">Textura do solo</div><table>${tb(so.textura, CORES_TEX)}</table><div class="subt">Classe de solo</div><table>${tb(so.ordem, CORES_ORDEM)}</table><div class="nota">${c ? `${esc(c.nome)} não tem mapa de uso: valores do município inteiro. ` : ''}Água disponível estimada: ~${so.cad.toFixed(0)} mm em 60 cm (pela textura).</div>`;
   const fts = FOTOS.filter(p => p.mun && String(+p.mun.properties.CD_MUN) === cd && (!cid || p.cult === cid)), rel = RELATOS.filter(r => r.muns.has(cd) && (!cid || r.cults.has(cid)));
   const outros = cid ? RELATOS.filter(r => r.muns.has(cd) && !r.cults.has(cid)).length : 0;
-  if (fts.length || rel.length || outros) h += `<h3>Campo${c ? ' · ' + esc(c.nome.toLowerCase()) : ''}</h3><div class="nota">${fts.length} foto${fts.length === 1 ? '' : 's'}${fts.length ? ' (última em ' + fmtD(new Date(Math.max(...fts.map(p => p.data)))) + ')' : ''} · ${rel.length} relato${rel.length === 1 ? '' : 's'}${rel.length ? ' (último: ' + esc(rel[0].nome) + ', ' + fmtD(rel[0].data) + ')' : ''}${outros ? ` · ${outros} outro${outros > 1 ? 's' : ''} cita${outros > 1 ? 'm' : ''} o município sem mencionar a cultura` : ''}</div>`;
+  if (fts.length || rel.length || outros) h += `<h3>Fotos e relatos de campo${c ? ' · ' + esc(c.nome.toLowerCase()) : ''}</h3><div class="nota">${fts.length} foto${fts.length === 1 ? '' : 's'}${fts.length ? ' (última em ' + fmtD(new Date(Math.max(...fts.map(p => p.data)))) + ')' : ''} · ${rel.length} relato${rel.length === 1 ? '' : 's'}${rel.length ? ' (último: ' + esc(rel[0].nome) + ', ' + fmtD(rel[0].data) + ')' : ''}${outros ? ` · ${outros} outro${outros > 1 ? 's' : ''} cita${outros > 1 ? 'm' : ''} o município sem mencionar a cultura` : ''}</div>`;
   return h;
 }
 function calendarioCritico(c, m) {
@@ -1272,11 +1272,11 @@ function htmlGeralEstado() {
       h += htmlClimaResumo(ce.mc, null, c, k3).replace('<h3>Clima e água no solo</h3>', `<h3>Clima e água no solo${c ? ' · áreas de ' + esc(c.nome.toLowerCase()) : ''}</h3>`); } }
   const sc = c ? soloCultura(cid, null) : null;
   if (sc) { const tb = (o, cores) => Object.entries(o).filter(([, v]) => v >= .5).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td><i style="background:${cores[k] || '#bdbdbd'}"></i>${esc(k)}</td><td>${v.toFixed(0)}%</td></tr>`).join('');
-    h += `<h3>Solos sob ${esc(c.nome.toLowerCase())} no MS</h3><table>${tb(sc.textura, CORES_TEX)}</table><table style="margin-top:6px">${tb(sc.ordem, CORES_ORDEM)}</table><div class="nota">${n0(sc.area)} ha mapeados (Aprosoja-MS) × solos 1:5.000.000.</div>`; }
+    h += `<h3>Solos sob ${esc(c.nome.toLowerCase())} no MS</h3><div class="subt">Textura do solo</div><table>${tb(sc.textura, CORES_TEX)}</table><div class="subt">Classe de solo</div><table>${tb(sc.ordem, CORES_ORDEM)}</table><div class="nota">${n0(sc.area)} ha mapeados (Aprosoja-MS) × solos 1:5.000.000.</div>`; }
   else if (!c) h += htmlSoloCultura(null);
   const fts = FOTOS.filter(p => !cid || p.cult === cid), rels = RELATOS.filter(r => !cid || r.cults.has(cid));
   if (fts.length || rels.length) { const pc = {}; fts.forEach(p => pc[p.cult] = (pc[p.cult] || 0) + 1);
-    h += `<h3>Campo${c ? ' · ' + esc(c.nome.toLowerCase()) : ''}</h3><div class="nota">${fts.length} foto${fts.length === 1 ? '' : 's'}${c ? '' : ` (${Object.entries(pc).map(([k, v]) => `${esc((CULT[k] || OUTRA).nome)} ${v}`).join(', ')})`} · ${rels.length} relato${rels.length === 1 ? '' : 's'}${rels.length ? ' (último: ' + esc(rels[0].nome) + ', ' + fmtD(rels[0].data) + ')' : ''}</div>`; }
+    h += `<h3>Fotos e relatos de campo${c ? ' · ' + esc(c.nome.toLowerCase()) : ''}</h3><div class="nota">${fts.length} foto${fts.length === 1 ? '' : 's'}${c ? '' : ` (${Object.entries(pc).map(([k, v]) => `${esc((CULT[k] || OUTRA).nome)} ${v}`).join(', ')})`} · ${rels.length} relato${rels.length === 1 ? '' : 's'}${rels.length ? ' (último: ' + esc(rels[0].nome) + ', ' + fmtD(rels[0].data) + ')' : ''}</div>`; }
   return h;
 }
 function trechosCultura(rel, cid, max = 2) {
