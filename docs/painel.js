@@ -294,7 +294,18 @@ function distrib(c, m, j) { const E = c.estadios; return E.map((e, s) => { const
 const pctCritico = (c, m, j) => distrib(c, m, j).reduce((t, v, i) => t + (c.estadios[i].critico ? v : 0), 0);
 const semanaDe = (c, d) => Math.floor((d - c.inicio) / (7 * 864e5)) + 1;
 const dataSem = (c, j) => addD(c.inicio, 7 * (j - 1));
-const cultAtual = () => PL && safraSel && PL[safraSel] ? PL[safraSel][cultSel] : null;
+// Cana-de-açúcar: sem acompanhamento fenológico na planilha. Entra como "cultura sem fenologia", com a área do
+// mapeamento da Aprosoja-MS por município (solo_cultura.json), Kc médio anual e raízes mais profundas.
+const CANA_SEL = '__cana', KC_CANA = 1.0, P_CANA = .65, PROF_CANA = 120;
+let CANA = null;
+function montarCana() {
+  if (!SOLO_CULT) return null;
+  const n = Object.keys(SOLO_CULT.culturas).find(x => culturaDe(x)?.id === 'cana'); if (!n) return null;
+  const mun = {}; for (const [cd, r] of Object.entries(SOLO_CULT.culturas[n].mun)) if (r.area >= 1) mun[cd] = {area: r.area};
+  return CANA = {cid: 'cana', nome: 'Cana-de-açúcar', semFenologia: true, mun, estadios: [], arquivos: SOLO_CULT.culturas[n].arquivos || []};
+}
+const profRaiz = c => c?.cid === 'cana' ? PROF_CANA : 60;
+const cultAtual = () => cultSel === CANA_SEL ? CANA : PL && safraSel && PL[safraSel] ? PL[safraSel][cultSel] : null;
 function mediaMS(c, fn) {   // média ponderada pela área (municípios com área informada); sem área: média simples
   let sa = 0, sv = 0, n = 0, ss = 0;
   for (const m of Object.values(c.mun)) { const v = fn(m); if (v == null) continue; n++; ss += v; if (m.area) { sa += m.area; sv += v * m.area; } }
@@ -306,7 +317,8 @@ const KC_FAO = {soja: [.40, 1.15, .50, .50], milho1: [.30, 1.20, .60, .55], milh
   amendoim: [.40, 1.15, .60, .50], arroz: [1.05, 1.20, .75, .20], feijao1: [.40, 1.15, .35, .45], feijao2: [.40, 1.15, .35, .45],
   algodao: [.35, 1.18, .60, .65], trigo: [.30, 1.15, .30, .55], aveia: [.30, 1.15, .25, .55], cana: [.40, 1.25, .75, .65]};
 const KC_PALHADA = .30;   // área colhida ou não semeada (solo com palhada)
-function paramsKc(c) { const t = KC_FAO[c.cid] || [.4, 1.1, .5, .5]; const o = c.kcPlan || {};
+function paramsKc(c) { if (c.semFenologia) return {ini: KC_CANA, mid: KC_CANA, fim: KC_CANA, p: P_CANA, fonte: 'média anual'};
+  const t = KC_FAO[c.cid] || [.4, 1.1, .5, .5]; const o = c.kcPlan || {};
   return {ini: o.ini ?? t[0], mid: o.mid ?? t[1], fim: o.fim ?? t[2], p: o.p ?? t[3], fonte: c.kcPlan ? 'planilha' : 'FAO-56'}; }
 // curva de Kc por dias após a semeadura, ancorada nos estádios da planilha:
 // inicial até o 2º estádio; sobe até o 1º estádio crítico; médio até o fim das fases críticas; desce até a colheita.
@@ -323,6 +335,7 @@ function kcCurva(c, das) {
 }
 // Kc médio da área semeada numa data: cada semana de semeadura é uma coorte com sua idade
 function kcInfo(c, m, data) {   // kc médio da área semeada e % dessa área ainda em campo (não colhida)
+  if (c.semFenologia) return {kc: KC_CANA, campo: 100};   // canavial: presente o ano todo, idades misturadas
   let soma = 0, peso = 0, ant = 0, campo = 0; const Dh = c.estadios.at(-1).dias;
   for (let w = 1; w <= m.serie.length; w++) {
     const ac = acum(m.serie, w), inc = ac - ant; ant = ac; if (inc <= 0) continue;
@@ -354,12 +367,12 @@ function valorPl(c, m, j) {
   let im = -1, vm = 0; distrib(c, m, j).forEach((v, i) => { if (v > vm) { vm = v; im = i; } }); return im;
 }
 defCam('plantio', {grupo: 'lav', nome: 'Evolução da safra (planilha)', op: .85, desab: true, st: 'conecte a pasta',
-  estilo: f => { const c = cultAtual(), m = c && c.mun[String(+f.properties.CD_MUN)]; if (!m) return {pane: 'plantio', fill: false, stroke: false};
+  estilo: f => { const c = cultAtual(), m = c && c.mun[String(+f.properties.CD_MUN)]; if (!m || c.semFenologia) return {pane: 'plantio', fill: false, stroke: false};
     const v = valorPl(c, m, semSel), k = visPl === 'estadio' ? corEstadio(c, v) : corSeq(v, visPl === 'critico' ? ESC_CR : ESC_PL);
     return k ? {pane: 'plantio', fill: true, fillColor: k, fillOpacity: OPC('plantio'), weight: 0, stroke: false} : {pane: 'plantio', fill: false, stroke: false}; },
   montar: async () => cultAtual() ? L.geoJSON(dadosMun, {interactive: false, style: CAM.plantio.estilo}) : null,
   sub: () => {
-    const c = cultAtual(); if (!c) return '';
+    const c = cultAtual(); if (!c || c.semFenologia) return '';
     let res = '';
     if (visPl === 'estadio') {
       const dist = new Array(c.estadios.length).fill(0); let sa = 0;
@@ -378,29 +391,33 @@ defCam('plantio', {grupo: 'lav', nome: 'Evolução da safra (planilha)', op: .85
   depois: () => document.querySelectorAll('#modo-pl button').forEach(b => b.onclick = () => { visPl = b.dataset.v; CAM.plantio.layer && CAM.plantio.layer.setStyle(CAM.plantio.estilo); atualizarSub('plantio'); })});
 
 function montarControlesCult() {
-  const safras = Object.keys(PL).sort().reverse();
-  safraSel = safras.includes(safraSel) ? safraSel : safras[0];
+  const safras = PL ? Object.keys(PL).sort().reverse() : [];
+  safraSel = safras.includes(safraSel) ? safraSel : (safras[0] || null);
   $('sel-safra').innerHTML = safras.map(s => `<option>${s}</option>`).join('');
-  $('sel-safra').value = safraSel;
-  $('sel-safra').style.display = safras.length > 1 ? '' : 'none';
+  if (safraSel) $('sel-safra').value = safraSel;
   preencherCulturas();
-  $('bloco-cult').hidden = false;
+  $('bloco-cult').hidden = !PL && !CANA;
 }
 function preencherCulturas() {
-  const P = PL[safraSel], nomes = Object.keys(P), com = nomes.filter(n => Object.keys(P[n].mun).length);
-  cultSel = com.includes(cultSel) ? cultSel : (com[0] || nomes[0]);
-  $('sel-cult').innerHTML = nomes.map(n => `<option value="${esc(n)}" ${com.includes(n) ? '' : 'disabled'}>${esc(n)}${com.includes(n) ? '' : ' (sem dados)'}</option>`).join('');
-  $('sel-cult').value = cultSel;
+  const P = PL && safraSel ? PL[safraSel] : {}, nomes = Object.keys(P), com = nomes.filter(n => Object.keys(P[n].mun).length);
+  if (cultSel !== CANA_SEL || !CANA) cultSel = com.includes(cultSel) ? cultSel : (com[0] || null);
+  $('sel-cult').innerHTML = (cultSel ? '' : '<option value="">Escolha a cultura…</option>')
+    + (PL ? nomes.map(n => `<option value="${esc(n)}" ${com.includes(n) ? '' : 'disabled'}>${esc(n)}${com.includes(n) ? '' : ' (sem dados)'}</option>`).join('') : '<option value="" disabled>Culturas anuais: conecte a pasta</option>')
+    + (CANA ? `<option value="${CANA_SEL}">Cana-de-açúcar (sem fenologia)</option>` : '');
+  $('sel-cult').value = cultSel || '';
   semSel = semanaPadrao();
   aoMudarCultura();
 }
 function semanaPadrao() { const c = cultAtual(); return c?.inicio ? Math.min(48, Math.max(1, semanaDe(c, HOJE))) : 1; }
 function aoMudarCultura() {
-  const c = cultAtual(); if (!c) return;
-  $('sl-sem').value = semSel;
-  const d = dataSem(c, semSel);
-  $('lb-sem').textContent = fmtD(d) + (d > HOJE ? ' · proj.' : '');
-  habilitar('plantio', true); setSt('plantio', '');
+  const c = cultAtual(), comFen = c && !c.semFenologia;
+  $('bloco-cult').querySelector('.sem').hidden = !comFen;
+  $('sel-safra').style.display = PL && Object.keys(PL).length > 1 && cultSel !== CANA_SEL ? '' : 'none';
+  $('nota-cult').innerHTML = !c ? 'A cultura escolhida filtra o mapa de água no solo, as fotos, os relatos e as análises.'
+    : c.semFenologia ? `Cana-de-açúcar: sem acompanhamento fenológico. O painel usa a área mapeada pela Aprosoja-MS (${n0(Object.values(c.mun).reduce((t, m) => t + m.area, 0))} ha), os solos sob a cultura, o clima e o balanço hídrico com Kc médio.` : 'Filtra o mapa, as fotos, os relatos e as análises.';
+  if (comFen) { $('sl-sem').value = semSel; const d = dataSem(c, semSel); $('lb-sem').textContent = fmtD(d) + (d > HOJE ? ' · proj.' : ''); }
+  habilitar('plantio', !!comFen); setSt('plantio', comFen ? '' : c ? 'sem fenologia' : (PL ? 'escolha a cultura' : 'conecte a pasta'));
+  if (!comFen && CAM.plantio.on) { $('cb-plantio').checked = false; ligar('plantio', false); }
   if (CAM.plantio.layer) CAM.plantio.layer.setStyle(CAM.plantio.estilo); else if (CAM.plantio.on) redesenhar('plantio');
   atualizarSub('plantio');
   atualizarAgua();
@@ -408,7 +425,10 @@ function aoMudarCultura() {
   if (selecionado) abrirFicha(selecionado, true);
 }
 $('sel-safra').onchange = e => { safraSel = e.target.value; preencherCulturas(); };
-$('sel-cult').onchange = e => { const c0 = cultAtual(), d = c0 ? dataSem(c0, semSel) : HOJE; cultSel = e.target.value; const c = cultAtual(); semSel = Math.min(48, Math.max(1, semanaDe(c, d))); aoMudarCultura(); };
+$('sel-cult').onchange = e => { const c0 = cultAtual(), d = c0 && !c0.semFenologia ? dataSem(c0, semSel) : HOJE; cultSel = e.target.value || null; const c = cultAtual();
+  if (c && !c.semFenologia) semSel = Math.min(48, Math.max(1, semanaDe(c, d)));
+  if ($('sel-cult').options[0]?.value === '' && cultSel) $('sel-cult').options[0].remove();
+  aoMudarCultura(); };
 $('sl-sem').oninput = e => { semSel = +e.target.value; aoMudarCultura(); };
 
 // =====================================================================
@@ -425,6 +445,7 @@ function calcClima(m, per, v) {
   if (v === 'v') { const x = sl('v'); return x.length ? Math.max(...x) : null; }
   if (v === 'amp') { const x = sl('tx'), n = sl('tn'); return x.length ? x.reduce((t, q, i) => t + q - (n[i] ?? q), 0) / x.length : null; }
   if (v === 'seco') return diasSecos(m);
+  if (v === 'div') return per.startsWith('f') ? concordancia(totaisModelos(m, a, b))?.amp ?? null : null;
 }
 function diasSecos(m) { let n = 0; for (let i = iHoje() - 1; i >= 0; i--) { if ((m.p[i] ?? 0) >= 1) break; n++; } return n; }
 const ESC_CL = {p: {c: ['#f7fbff', '#c6dbef', '#6baed6', '#2171b5', '#08306b'], min: 0, max: {f7: 80, f15: 150, p7: 80, p30: 200}, u: 'mm'},
@@ -433,7 +454,8 @@ const ESC_CL = {p: {c: ['#f7fbff', '#c6dbef', '#6baed6', '#2171b5', '#08306b'], 
   tn: {c: ['#3b4cc0', '#7b9ff9', '#c0d4f5', '#f2f2f2', '#f4c6a6'], min: 0, max: 20, u: '°C'},
   amp: {c: ['#f2f0f7', '#cbc9e2', '#9e9ac8', '#6a51a3', '#3f007d'], min: 6, max: 18, u: '°C'},
   v: {c: ['#f7fcf5', '#c7e9c0', '#74c476', '#238b45', '#00441b'], min: 10, max: 50, u: 'km/h'},
-  seco: {c: ['#ffffe5', '#fee391', '#fe9929', '#cc4c02', '#662506'], min: 0, max: 30, u: 'dias'}};
+  seco: {c: ['#ffffe5', '#fee391', '#fe9929', '#cc4c02', '#662506'], min: 0, max: 30, u: 'dias'},
+  div: {c: ['#f7f4f9', '#d4b9da', '#c994c7', '#df65b0', '#980043'], min: 0, max: {f7: 60, f15: 100, p7: 60, p30: 100}, u: 'mm'}};
 let clPer = 'f7', clVar = 'p';
 const maxEsc = e => typeof e.max === 'object' ? e.max[clPer] : e.max;
 async function garantirClima() { CL = CL || await pegar('dados/clima/modelo_municipios.json'); return CL; }
@@ -445,15 +467,15 @@ defCam('clima', {grupo: 'clima', nome: 'Clima por município', op: .8,
   sub: () => {
     const e = ESC_CL[clVar], mx = maxEsc(e);
     let info = 'Dados de clima ainda não gerados pela rotina diária.';
-    if (CL) { const [a, b] = janela(clPer); info = `${clVar === 'seco' ? 'Até ' + fmtD(deISO(CL.hoje)) : fmtD(deISO(CL.datas[a])) + ' a ' + fmtD(deISO(CL.datas[b - 1]))} · Open-Meteo · gerado ${new Date(CL.gerado).toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'})}${clPer.startsWith('p') || clVar === 'seco' ? '<br>Dias passados: estimativa de modelo, não medição.' : ''}`; }
+    if (CL) { const [a, b] = janela(clPer); info = `${clVar === 'seco' ? 'Até ' + fmtD(deISO(CL.hoje)) : fmtD(deISO(CL.datas[a])) + ' a ' + fmtD(deISO(CL.datas[b - 1]))} · Open-Meteo${clPer.startsWith('f') && CL.modelos ? ' (média de ' + Object.keys(CL.modelos).length + ' modelos)' : ''} · gerado ${new Date(CL.gerado).toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'})}${clPer.startsWith('p') || clVar === 'seco' ? '<br>Dias passados: estimativa de modelo, não medição.' : ''}`; }
     return `<select id="cl-per" class="campo"><option value="f7">Próximos 7 dias (previsão)</option><option value="f15">Próximos 15 dias (previsão)</option><option value="p7">Últimos 7 dias (estimativa)</option><option value="p30">Últimos 30 dias (estimativa)</option></select>
-      <select id="cl-var" class="campo"><option value="p">Chuva acumulada (mm)</option><option value="bh">Chuva − evapotranspiração (mm)</option><option value="tx">Temperatura máxima (°C)</option><option value="tn">Temperatura mínima (°C)</option><option value="amp">Amplitude térmica média (°C)</option><option value="v">Vento máximo (km/h)</option><option value="seco">Dias seguidos sem chuva (até hoje)</option></select>
+      <select id="cl-var" class="campo"><option value="p">Chuva acumulada (mm)</option><option value="bh">Chuva − evapotranspiração (mm)</option><option value="tx">Temperatura máxima (°C)</option><option value="tn">Temperatura mínima (°C)</option><option value="amp">Amplitude térmica média (°C)</option><option value="v">Vento máximo (km/h)</option><option value="seco">Dias seguidos sem chuva (até hoje)</option><option value="div">Divergência entre modelos na chuva prevista (mm)</option></select>
       <div class="leg">${[0, 25, 50, 75, 100].map(t => `<div><i style="background:${corSeq(t, e.c)}"></i>${t === 100 ? '≥ ' : t === 0 && clVar !== 'seco' && clVar !== 'p' ? '≤ ' : ''}${Math.round(e.min + (mx - e.min) * t / 100)} ${e.u}</div>`).join('')}</div>
-      ${clVar === 'tn' ? '<div class="nota">Mínimas ≤ 3 °C: risco de geada.</div>' : ''}<div class="nota">${info}</div>`;
+      ${clVar === 'tn' ? '<div class="nota">Mínimas ≤ 3 °C: risco de geada.</div>' : ''}${clVar === 'div' ? '<div class="nota">Diferença entre o modelo mais chuvoso e o mais seco no período (só modelos que cobrem o período inteiro). Quanto maior, mais incerta a previsão de chuva.</div>' : ''}<div class="nota">${info}</div>`;
   },
   depois: () => { const p = $('cl-per'), v = $('cl-var'); if (!p) return; p.value = clPer; v.value = clVar; p.disabled = clVar === 'seco';
     p.onchange = () => { clPer = p.value; CAM.clima.layer && CAM.clima.layer.setStyle(CAM.clima.estilo); atualizarSub('clima'); };
-    v.onchange = () => { clVar = v.value; CAM.clima.layer && CAM.clima.layer.setStyle(CAM.clima.estilo); atualizarSub('clima'); }; }});
+    v.onchange = () => { clVar = v.value; if (clVar === 'div' && clPer.startsWith('p')) clPer = 'f7'; CAM.clima.layer && CAM.clima.layer.setStyle(CAM.clima.estilo); atualizarSub('clima'); }; }});
 // ------------------------------------------------- água no solo para a cultura escolhida (balanço hídrico FAO-56)
 // Classes pelo Ks (fração da transpiração potencial que a lavoura consegue manter) ou pela demanda atendida (ΣETa/ΣETc).
 // A demanda é a de cada cultura: ETc = ET0 × Kc da fase (FAO-56), e o limite de estresse usa o p da cultura.
@@ -464,7 +486,8 @@ const classeKs = ks => ks == null ? null : ks >= .99 ? 0 : ks >= .7 ? 1 : ks >= 
 const classeAt = a => a == null ? null : a >= 95 ? 0 : a >= 80 ? 1 : a >= 60 ? 2 : 3;
 const MODOS_AG = {hoje: 'Hoje', fut: 'Pior dia (15 dias)', at30: 'Demanda atendida (30 dias)', at15: 'Demanda atendida (próx. 15)'};
 let agVis = 'hoje', BHC = null;
-function cadMun(cid, cd) { const f = MUN_IDX[cd]; return soloCultura(cid, cd)?.cad || (f && soloDoMunicipio(f)?.cad) || 60; }
+// água disponível (mm) na zona radicular: textura do solo sob a cultura (ou do município) para 60 cm; cana com raízes até 120 cm
+function cadMun(cid, cd) { const f = MUN_IDX[cd]; return (soloCultura(cid, cd)?.cad || (f && soloDoMunicipio(f)?.cad) || 60) * (cid === 'cana' ? PROF_CANA / 60 : 1); }
 function bhCultura(c) {   // balanço de todos os municípios da cultura, em cache
   if (!c || !CL) return null;
   const chave = [safraSel, cultSel, CL.gerado, !!VAL, !!SOLO_CULT, !!dadosSolo].join('|');
@@ -496,7 +519,7 @@ defCam('agua', {grupo: 'clima', nome: 'Água no solo', op: .8, desab: true, st: 
     return `<div class="seg seg-wrap" id="modo-ag">${Object.entries(MODOS_AG).map(([k, n]) => `<button data-v="${k}" class="${agVis === k ? 'on' : ''}">${n}</button>`).join('')}</div>
       <div class="resumo">${res}</div>
       <div class="leg">${CLS_AG.map((x, k) => `<div><i style="background:${x.cor}"></i>${x.nome} (${crit[k]})</div>`).join('')}<div><i style="background:${COR_SEMCAMPO}"></i>Sem lavoura em campo</div></div>
-      <div class="nota">Demanda de ${esc(c.nome.toLowerCase())}: ETc = ET0 × Kc (${n2(kp.ini)} no início, ${n2(kp.mid)} no pico, ${n2(kp.fim)} no fim; ${kp.fonte}), seguindo a fase de cada semana de semeadura da planilha. Estresse começa quando a água cai abaixo de ${(100 * (1 - kp.p)).toFixed(0)}% da disponível (p = ${n2(kp.p)}). Água disponível pela textura do solo sob a cultura. ${agVis.startsWith('at') ? 'Demanda atendida = consumo estimado ÷ consumo potencial nos dias com lavoura em campo.' : 'Ks = fração da transpiração potencial que a lavoura consegue manter.'} Clique no município para ver o gráfico.</div>`;
+      <div class="nota">${c.semFenologia ? `Demanda da cana: ETc = ET0 × Kc médio anual de ${n2(KC_CANA)} (canaviais com idades misturadas; valor aproximado da curva FAO-56, 0,40 / 1,25 / 0,75). Raízes até ${PROF_CANA} cm; estresse abaixo de ${(100 * (1 - P_CANA)).toFixed(0)}% da água disponível (p = ${n2(P_CANA)}). ` : `Demanda de ${esc(c.nome.toLowerCase())}: ETc = ET0 × Kc (${n2(kp.ini)} no início, ${n2(kp.mid)} no pico, ${n2(kp.fim)} no fim; ${kp.fonte}), seguindo a fase de cada semana de semeadura da planilha. Estresse começa quando a água cai abaixo de ${(100 * (1 - kp.p)).toFixed(0)}% da disponível (p = ${n2(kp.p)}). `}Água disponível pela textura do solo sob a cultura. ${agVis.startsWith('at') ? 'Demanda atendida = consumo estimado ÷ consumo potencial nos dias com lavoura em campo.' : 'Ks = fração da transpiração potencial que a lavoura consegue manter.'} Clique no município para ver o gráfico.</div>`;
   },
   depois: () => document.querySelectorAll('#modo-ag button').forEach(b => b.onclick = () => { agVis = b.dataset.v; CAM.agua.layer && CAM.agua.layer.setStyle(CAM.agua.estilo); atualizarSub('agua'); })});
 function dicaMun(f) {   // dica ao passar o mouse; com a camada de água ligada, mostra a situação da cultura
@@ -509,7 +532,7 @@ function dicaMun(f) {   // dica ao passar o mouse; com a camada de água ligada,
 }
 function atualizarAgua() {
   if (!CAM.agua) return; const c = cultAtual();
-  habilitar('agua', !!c); if (c) setSt('agua', '');
+  habilitar('agua', !!c); setSt('agua', c ? '' : CANA || PL ? 'escolha a cultura' : 'conecte a pasta');
   if (CAM.agua.layer) CAM.agua.layer.setStyle(CAM.agua.estilo); else if (CAM.agua.on) redesenhar('agua');
   atualizarSub('agua');
 }
@@ -672,7 +695,7 @@ async function carregarFotos(lista) {
   if (selecionado) abrirFicha(selecionado, true);
 }
 const fotoVisivel = p => CAM.fotos.seguir ? (cultAtual() ? p.cult === cultAtual().cid : true) : (!fotoFiltro || fotoFiltro.has(p.cult));
-defCam('fotos', {grupo: 'campo', nome: 'Fotos de campo', desab: true, st: 'conecte a pasta', seguir: false,
+defCam('fotos', {grupo: 'campo', nome: 'Fotos de campo', desab: true, st: 'conecte a pasta', seguir: true,
   montar: async () => L.layerGroup(FOTOS.filter(fotoVisivel).map(p => {
     const cult = CULT[p.cult] || OUTRA;
     const mk = L.marker([p.lat, p.lon], {opacity: OPC('fotos'), riseOnHover: true,
@@ -691,7 +714,7 @@ defCam('fotos', {grupo: 'campo', nome: 'Fotos de campo', desab: true, st: 'conec
     if (!FOTOS.length) return CAM.fotos.semPos?.length ? `<div class="nota">${CAM.fotos.semPos.length} fotos sem localização (sem GPS e sem carimbo legível).</div>` : '';
     const cont = {}; FOTOS.forEach(p => cont[p.cult] = (cont[p.cult] || 0) + 1);
     const ids = [...CULTURAS.map(c => c.id), 'outra'].filter(id => cont[id]);
-    const ativo = id => CAM.fotos.seguir ? (cultAtual()?.cid === id) : (!fotoFiltro || fotoFiltro.has(id));
+    const ativo = id => CAM.fotos.seguir && cultAtual() ? (cultAtual().cid === id) : (!fotoFiltro || fotoFiltro.has(id));
     return `<div class="mini"><label><input type="checkbox" id="ft-seguir" ${CAM.fotos.seguir ? 'checked' : ''}> só a cultura selecionada</label></div>
       <div class="chips">${ids.map(id => { const c = CULT[id] || OUTRA; return `<span class="chip ${ativo(id) ? '' : 'off'}" data-c="${id}" title="Mostrar/ocultar"><span class="pin" style="background:${c.cor}">${iconeCultura(id)}</span>${esc(c.nome)} (${cont[id]})</span>`; }).join('')}</div>
       <div class="mini"><a id="ft-todas">todas</a><a id="ft-nenhuma">nenhuma</a></div>
@@ -822,35 +845,150 @@ async function abrirFicha(f, manter) {
   if (f === ESTADO) {
     $('f-nome').textContent = 'Mato Grosso do Sul'; $('f-sub').textContent = `Visão estadual · ${dadosMun.features.length} municípios`;
     await garantirClima();
-    if (abaFicha === 'geral') $('f-geral').innerHTML = htmlGeralEstado();
+    if (abaFicha === 'geral') { $('f-geral').innerHTML = htmlGeralEstado(); const b = $('bt-clima'); if (b) b.onclick = () => abrirClima(ESTADO); }
     else { $('f-analise').innerHTML = '<div class="nota">Calculando a análise de todos os municípios…</div>'; setTimeout(() => { $('f-analise').innerHTML = `<div class="analise">${gerarAnaliseEstado()}</div>`; ligarCopiar(); }, 30); }
     return;
   }
   const p = f.properties;
   $('f-nome').textContent = p.NM_MUN; $('f-sub').textContent = `IBGE ${p.CD_MUN} · ${p.NM_RGI || ''}${p.AREA_KM2 ? ' · ' + Number(p.AREA_KM2).toLocaleString('pt-BR') + ' km²' : ''}`;
   await garantirClima();
-  if (abaFicha === 'geral') $('f-geral').innerHTML = htmlGeral(f);
+  if (abaFicha === 'geral') { $('f-geral').innerHTML = htmlGeral(f); const b = $('bt-clima'); if (b) b.onclick = () => abrirClima(f); }
   else $('f-analise').innerHTML = `<div class="analise">${gerarAnalise(f)}</div>`;
 }
-function graficoClima(m) {
-  const h = iHoje(), a = Math.max(0, h - 30), b = Math.min(CL.datas.length, h + 15), idx = [...Array(b - a).keys()].map(i => i + a);
-  const W = 300, H = 90, bw = W / idx.length, pm = Math.max(20, ...idx.map(i => m.p[i] || 0));
+// gráfico de chuva (barras) e temperaturas máxima/mínima (linhas) num intervalo de dias [a, b)
+function graficoClima(m, a, b, W = 300, H = 90) {
+  const h = iHoje(); a = Math.max(0, a ?? h - 30); b = Math.min(CL.datas.length, b ?? h);
+  const idx = [...Array(b - a).keys()].map(i => i + a);
+  const bw = W / idx.length, pm = Math.max(20, ...idx.map(i => m.p[i] || 0));
   const tmin = Math.min(...idx.map(i => m.tn[i] ?? 99)) - 2, tmax = Math.max(...idx.map(i => m.tx[i] ?? 0)) + 2;
-  const y = t => H - (t - tmin) / (tmax - tmin) * H, lin = k => idx.map((i, j) => m[k][i] == null ? '' : `${j ? 'L' : 'M'}${(j + .5) * bw},${y(m[k][i])}`).join('');
-  const xh = (h - a) * bw;
+  const y = t => H - (t - tmin) / (tmax - tmin) * H, lin = k => idx.map((i, j) => m[k][i] == null ? '' : `${j ? 'L' : 'M'}${((j + .5) * bw).toFixed(1)},${y(m[k][i]).toFixed(1)}`).join('');
   return `<svg class="graf" viewBox="0 0 ${W} ${H + 28}" width="100%" font-size="10" style="overflow:visible">
-    <rect x="${xh}" y="0" width="${W - xh}" height="${H}" fill="currentColor" opacity=".06"/>
-    ${idx.map((i, j) => { const p = m.p[i] || 0, hh = H * .6 * p / pm; return `<rect x="${j * bw + .5}" y="${H - hh}" width="${Math.max(1, bw - 1)}" height="${hh}" fill="#2171b5"><title>${CL.datas[i]}: ${p} mm · ${m.tn[i]}–${m.tx[i]} °C</title></rect>`; }).join('')}
+    ${idx.map((i, j) => { const p = m.p[i] || 0, hh = H * .6 * p / pm; return `<rect x="${(j * bw + .5).toFixed(1)}" y="${(H - hh).toFixed(1)}" width="${Math.max(1, bw - 1).toFixed(1)}" height="${hh.toFixed(1)}" fill="#2171b5"><title>${fmtD(deISO(CL.datas[i]))}: ${n1(p)} mm · ${n1(m.tn[i])} a ${n1(m.tx[i])} °C</title></rect>`; }).join('')}
     <path d="${lin('tx')}" fill="none" stroke="#d9472b" stroke-width="1.5"/><path d="${lin('tn')}" fill="none" stroke="#3b6fb6" stroke-width="1.5"/>
     <line x1="0" x2="${W}" y1="${H}" y2="${H}" stroke="#bbb"/>
-    <text x="0" y="${H + 12}">${fmtD(deISO(CL.datas[a]))}</text><text x="${xh}" y="${H + 12}" text-anchor="middle">hoje</text><text x="${W}" y="${H + 12}" text-anchor="end">${fmtD(deISO(CL.datas[b - 1]))}</text>
-    <text x="0" y="${H + 25}" fill="#2171b5">■ chuva (máx ${pm.toFixed(0)} mm)</text><text x="${W}" y="${H + 25}" text-anchor="end"><tspan fill="#d9472b">— máx</tspan> <tspan fill="#3b6fb6">— mín</tspan> ${tmin.toFixed(0)}–${tmax.toFixed(0)} °C</text></svg>`;
+    <text x="0" y="${H + 12}">${fmtD(deISO(CL.datas[a]))}</text><text x="${W}" y="${H + 12}" text-anchor="end">${fmtD(deISO(CL.datas[b - 1]))}</text>
+    <text x="0" y="${H + 25}"><tspan fill="#2171b5">■ chuva (máx ${pm.toFixed(0)} mm)</tspan></text><text x="${W}" y="${H + 25}" text-anchor="end"><tspan fill="#d9472b">— máx</tspan> <tspan fill="#3b6fb6">— mín</tspan> ${tmin.toFixed(0)}–${tmax.toFixed(0)} °C</text></svg>`;
+}
+// ------------------------------------------------- previsão por vários modelos (média, faixa e concordância)
+const nomeMod = k => CL?.modelos?.[k] || k.toUpperCase();
+function totaisModelos(mc, i0, i1) {   // chuva acumulada de cada modelo que cobre todos os dias do intervalo
+  if (!mc.mod) return null; const r = {};
+  for (const [k, s] of Object.entries(mc.mod)) { const v = s.slice(i0, i1); if (v.length < i1 - i0 || v.some(x => x == null)) continue; r[k] = v.reduce((t, x) => t + x, 0); }
+  return Object.keys(r).length ? r : null;
+}
+function concordancia(tot) {   // convenção do painel: amplitude entre modelos frente à média
+  const v = tot ? Object.values(tot) : []; if (v.length < 2) return null;
+  const mn = Math.min(...v), mx = Math.max(...v), md = v.reduce((t, x) => t + x, 0) / v.length, amp = mx - mn;
+  return {mn, mx, md, amp, n: v.length, nivel: amp <= Math.max(10, .4 * md) ? 'alta' : amp <= Math.max(20, .8 * md) ? 'média' : 'baixa'};
+}
+const COR_CONC = {alta: '#3f9a4c', 'média': '#d9a21b', baixa: '#c0502a'};
+function txtConc(cc) { return cc ? `<span class="conc" style="background:${COR_CONC[cc.nivel]}">concordância ${cc.nivel}</span>` : ''; }
+function graficoPrevisao(mc, W = 300, H = 92) {
+  const h = iHoje(), b = CL.datas.length, idx = [...Array(b - h).keys()].map(i => i + h); if (!idx.length) return '';
+  const bw = W / idx.length, pm = Math.max(20, ...idx.map(i => mc.p_max?.[i] ?? mc.p[i] ?? 0));
+  const y = v => H - H * .92 * v / pm;
+  return `<svg class="graf" viewBox="0 0 ${W} ${H + 28}" width="100%" font-size="10" style="overflow:visible">
+    ${[.25, .5, .75].map(t => `<line x1="0" x2="${W}" y1="${y(pm * t).toFixed(1)}" y2="${y(pm * t).toFixed(1)}" stroke="currentColor" opacity=".07"/>`).join('')}
+    ${idx.map((i, j) => { const p = mc.p[i] || 0, n = mc.n_mod?.[i], x = j * bw, xc = x + bw / 2, lo = mc.p_min?.[i], hi = mc.p_max?.[i];
+      const barra = `<rect x="${(x + bw * .18).toFixed(1)}" y="${y(p).toFixed(1)}" width="${(bw * .64).toFixed(1)}" height="${(H - y(p)).toFixed(1)}" fill="#2171b5" opacity="${n != null && n <= 2 ? .4 : .85}"/>`;
+      const faixa = lo != null && hi > lo ? `<line x1="${xc.toFixed(1)}" x2="${xc.toFixed(1)}" y1="${y(lo).toFixed(1)}" y2="${y(hi).toFixed(1)}" stroke="currentColor" stroke-width="1.2" opacity=".55"/><line x1="${(xc - bw * .2).toFixed(1)}" x2="${(xc + bw * .2).toFixed(1)}" y1="${y(hi).toFixed(1)}" y2="${y(hi).toFixed(1)}" stroke="currentColor" opacity=".55"/>` : '';
+      return `<g>${barra}${faixa}<rect x="${x.toFixed(1)}" y="0" width="${bw.toFixed(1)}" height="${H}" fill="transparent"><title>${fmtD(deISO(CL.datas[i]))}: média ${n1(p)} mm${lo != null ? ` · modelos entre ${n1(lo)} e ${n1(hi)} mm (${n} modelo${n > 1 ? 's' : ''})` : ''}</title></rect></g>`; }).join('')}
+    <line x1="0" x2="${W}" y1="${H}" y2="${H}" stroke="#bbb"/>
+    <text x="0" y="${H + 12}">hoje</text><text x="${W / 2}" y="${H + 12}" text-anchor="middle">${fmtD(deISO(CL.datas[h + Math.floor(idx.length / 2)]))}</text><text x="${W}" y="${H + 12}" text-anchor="end">${fmtD(deISO(CL.datas[b - 1]))}</text>
+    <text x="0" y="${H + 25}"><tspan fill="#2171b5">■ chuva, média dos modelos</tspan><tspan> · ┃ faixa entre modelos · barra clara: 1–2 modelos</tspan></text></svg>`;
+}
+// série ponderada de vários municípios (estado): médias diárias e, por modelo, chuva média; faixa entre modelos
+function climaPonderado(pesos) {
+  const cds = Object.keys(pesos).filter(cd => CL.mun[cd]); if (!cds.length) return null;
+  const med = s => CL.datas.map((_, i) => { let sw = 0, sv = 0; for (const cd of cds) { const v = s(CL.mun[cd])?.[i]; if (v == null) continue; sw += pesos[cd]; sv += pesos[cd] * v; } return sw ? sv / sw : null; });
+  const out = {}; for (const k of ['p', 'tx', 'tn', 'et0']) out[k] = med(m => m[k]);
+  const mods = Object.keys(CL.mun[cds[0]].mod || {});
+  if (mods.length) { out.mod = {}; for (const k of mods) out.mod[k] = med(m => m.mod?.[k]);
+    out.p_min = CL.datas.map((_, i) => { const v = mods.map(k => out.mod[k][i]).filter(x => x != null); return v.length ? Math.min(...v) : null; });
+    out.p_max = CL.datas.map((_, i) => { const v = mods.map(k => out.mod[k][i]).filter(x => x != null); return v.length ? Math.max(...v) : null; });
+    out.n_mod = CL.datas.map((_, i) => mods.filter(k => out.mod[k][i] != null).length); }
+  return {mc: out, cds, pesos};
+}
+// resumo compacto na visão geral (o detalhe abre na janela de clima)
+function htmlClimaResumo(mc, bh, c, kpi3) {
+  const h0 = iHoje(), s = (i0, i1) => mc.p.slice(Math.max(0, i0), i1).reduce((t, x) => t + (x || 0), 0), cc = concordancia(totaisModelos(mc, h0, h0 + 7));
+  const k = bh ? (bh.campoAtual > 0 ? classeKs(bh.ksAtual) : -1) : null;
+  let h = `<h3>Clima e água no solo</h3><div class="kpis"><div class="kpi"><b>${s(h0 - 30, h0).toFixed(0)} mm</b><span>chuva 30 dias (estimativa)</span></div><div class="kpi"><b>${s(h0, h0 + 15).toFixed(0)} mm</b><span>previsão 15 dias${cc ? `<br>concordância ${cc.nivel}` : ''}</span></div>`;
+  h += kpi3 ? kpi3 : bh && bh.atual != null ? `<div class="kpi"><b style="color:${k == null || k < 0 ? 'var(--tinta)' : CLS_AG[k].cor}">${n0(bh.atual)}%</b><span>água no solo · ${k == null || k < 0 ? 'sem lavoura em campo' : CLS_AG[k].nome.toLowerCase()}</span></div>` : `<div class="kpi"><b>${diasSecos(mc)}</b><span>dias sem chuva</span></div>`;
+  h += `</div>`;
+  if (mc.tn.slice(h0, h0 + 15).some(t => t != null && t <= 3)) h += `<div style="color:var(--alerta);font-weight:600;font-size:12.5px">⚠ Previsão de mínima ≤ 3 °C: risco de geada</div>`;
+  return h + `<button class="btn sec2" id="bt-clima" style="margin-top:8px">Abrir clima e água no solo</button>`;
+}
+// ------------------------------------------------- janela de clima (município ou estado)
+function htmlJanelaClima(alvo) {
+  const c = cultAtual(), h0 = iHoje(), est = alvo === ESTADO;
+  let mc, cd = null, f = null;
+  if (est) { const pesos = {}; if (c) for (const [k, m] of Object.entries(c.mun)) pesos[k] = m.area || 1; else for (const k in CL.mun) pesos[k] = 1; mc = climaPonderado(pesos)?.mc; }
+  else { f = alvo; cd = String(+f.properties.CD_MUN); mc = CL.mun[cd]; }
+  if (!mc) return '<p>Sem dados de clima para este local.</p>';
+  const soma = (k, i0, i1) => mc[k].slice(Math.max(0, i0), i1).reduce((t, x) => t + (x || 0), 0);
+  const fat = est ? null : fatorET0(...centroMun(cd), 'previsao');
+  const out = [];
+  // 1. previsão
+  const t7 = totaisModelos(mc, h0, h0 + 7), t15 = totaisModelos(mc, h0, h0 + 15), c7 = concordancia(t7), c15 = concordancia(t15);
+  let tp = `<p>Próximos 7 dias: <b>${soma('p', h0, h0 + 7).toFixed(0)} mm</b>${c7 ? ` (modelos entre ${c7.mn.toFixed(0)} e ${c7.mx.toFixed(0)} mm) ${txtConc(c7)}` : ''}<br>Próximos 15 dias: <b>${soma('p', h0, h0 + 15).toFixed(0)} mm</b>${c15 ? ` (entre ${c15.mn.toFixed(0)} e ${c15.mx.toFixed(0)} mm, ${c15.n} modelos cobrem os 15 dias) ${txtConc(c15)}` : ''}</p>`;
+  if (mc.mod) {
+    const ks = Object.keys(mc.mod);
+    tp += `<table class="tab-ag"><tr><th>Modelo</th><th>7 dias</th><th>15 dias</th></tr>${ks.map(k => `<tr><td>${esc(nomeMod(k))}</td><td>${t7?.[k] != null ? t7[k].toFixed(0) + ' mm' : '—'}</td><td>${t15?.[k] != null ? t15[k].toFixed(0) + ' mm' : '—'}</td></tr>`).join('')}<tr><td><b>Média usada no painel</b></td><td><b>${soma('p', h0, h0 + 7).toFixed(0)} mm</b></td><td><b>${soma('p', h0, h0 + 15).toFixed(0)} mm</b></td></tr></table>
+      <div class="nota">“—”: o modelo não cobre o período inteiro (ICON e UKMO vão até ~7 dias; GEM, 10; JMA, 11; ECMWF, 15; GFS, 16). A média de cada dia usa os modelos disponíveis naquele dia. Concordância (convenção do painel): alta quando a diferença entre o modelo mais chuvoso e o mais seco é de até 40% da média (ou 10 mm); baixa quando passa de 80% (ou 20 mm).</div>`;
+  } else tp += `<div class="nota">A comparação entre modelos aparece a partir da próxima atualização automática dos dados.</div>`;
+  const tx = mc.tx.slice(h0, h0 + 15).filter(x => x != null), tn = mc.tn.slice(h0, h0 + 15).filter(x => x != null);
+  tp += `<p>Temperaturas previstas (média dos modelos): máximas até ${tx.length ? n1(Math.max(...tx)) : '—'} °C, mínimas a partir de ${tn.length ? n1(Math.min(...tn)) : '—'} °C. ET0 prevista: ${soma('et0', h0, h0 + 15).toFixed(0)} mm em 15 dias${fat && Math.abs(fat.f - 1) >= .03 ? ` (${(soma('et0', h0, h0 + 15) * fat.f).toFixed(0)} mm após o ajuste pelas estações INMET)` : ''}.</p>`;
+  out.push(`<section class="jc"><h3>Previsão (16 dias)</h3>${graficoPrevisao(mc, 470, 110)}${graficoClima(mc, h0, CL.datas.length, 470, 80)}${tp}</section>`);
+  // 2. últimos 30 dias
+  let tr = `<p>Chuva: <b>${soma('p', h0 - 30, h0).toFixed(0)} mm</b> · ET0: ${soma('et0', h0 - 30, h0).toFixed(0)} mm${est ? '' : ` · ${diasSecos(mc)} dia${diasSecos(mc) === 1 ? '' : 's'} seguidos sem chuva até hoje`}.</p><div class="nota">Dias passados: estimativa do modelo de maior resolução para o local (não é medição nem média de modelos). Após ~5 dias, o histórico permanente passa a usar a reanálise ERA5.</div>`;
+  if (!est) {
+    const ct = centroMun(cd), ep = estacaoProxima(ct[1], ct[0]);
+    if (ep) { const ds = Object.keys(ep.e.serie).slice(-30), pe = ds.reduce((t, d) => t + (ep.e.serie[d].p || 0), 0), v = VAL?.estacoes.find(x => x.codigo === ep.e.codigo);
+      tr += `<h4>Estação INMET mais próxima: ${esc(ep.e.nome)} (${ep.d.toFixed(0)} km)</h4><p>Registrou ${pe.toFixed(0)} mm nos últimos 30 dias com dados (até ${fmtD(deISO(ds.at(-1)))}).</p>${htmlValChuva(v)}${valEst(ep.e.codigo)}`; }
+    else tr += `<div class="nota">Nenhuma estação INMET a menos de 70 km.</div>`;
+  } else tr += htmlValChuvaEstado();
+  out.push(`<section class="jc"><h3>Últimos 30 dias</h3>${graficoClima(mc, h0 - 30, h0, 470, 110)}${tr}</section>`);
+  // 3. água no solo
+  if (!c) out.push(`<section class="jc larga"><h3>Água no solo</h3><p>Escolha uma cultura em “Safra e cultura” para ver o balanço hídrico.</p></section>`);
+  else if (est) out.push(`<section class="jc larga">${htmlAguaEstado(c)}</section>`);
+  else { const m = c.mun[cd]; out.push(`<section class="jc larga">${m ? htmlAgua(f, c, m, mc, 900) : `<h3>Água no solo · ${esc(c.nome)}</h3><p>Sem ${esc(c.nome.toLowerCase())} ${c.semFenologia ? 'mapeada' : 'na planilha'} para este município.</p>`}</section>`); }
+  return `<div class="janela-clima">${out.join('')}</div><div class="nota" style="margin-top:10px">${esc(CL.fonte || 'Open-Meteo')} Atualizado em ${new Date(CL.gerado).toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'})}.</div>`;
+}
+function htmlValChuva(v) {
+  const x = v?.chuva_era5 || v?.chuva_previsao; if (!x) return '';
+  return `<p class="nota" style="color:var(--tinta)">Chuva do modelo × estação (${v.chuva_era5 ? 'reanálise ERA5' : 'estimativa recente'}, ${x.n} dias com dados): modelo ${x.total_modelo} mm, estação ${x.total_inmet} mm (${x.vies_pct > 0 ? '+' : ''}${n1(x.vies_pct)}%). Correlação das somas semanais r = ${n2(x.r_7dias)}; dia com/sem chuva coincidiu em ${x.acerto_dias}% dos dias; dos dias com chuva na estação, o modelo indicou chuva em ${x.deteccao ?? '—'}%. Só descritivo: a chuva não é corrigida.</p>`;
+}
+function htmlValChuvaEstado() {
+  const l = (VAL?.estacoes || []).map(v => ({v, x: v.chuva_era5 || v.chuva_previsao})).filter(o => o.x);
+  if (!l.length) return '<div class="nota">A comparação da chuva com as estações INMET aparece após a próxima atualização automática.</div>';
+  const med = a => { const s = a.filter(x => x != null).sort((p, q) => p - q); return s.length ? s[Math.floor(s.length / 2)] : null; };
+  return `<h4>Chuva do modelo × estações INMET</h4><p>Mediana entre ${l.length} estações: viés de ${n1(med(l.map(o => o.x.vies_pct)))}% no total, correlação das somas semanais ${n2(med(l.map(o => o.x.r_7dias)))}.</p>
+    <details><summary class="nota" style="cursor:pointer">Ver por estação</summary><table class="tab-ag"><tr><th>Estação</th><th>Estação mm</th><th>Modelo mm</th><th>Viés</th><th>r 7 dias</th></tr>${l.sort((a, b) => a.v.nome.localeCompare(b.v.nome)).map(({v, x}) => `<tr><td>${esc(v.nome)}</td><td>${x.total_inmet}</td><td>${x.total_modelo}</td><td>${x.vies_pct > 0 ? '+' : ''}${n0(x.vies_pct)}%</td><td>${n2(x.r_7dias)}</td></tr>`).join('')}</table></details>`;
+}
+function htmlAguaEstado(c) {
+  const B = bhCultura(c); if (!B) return '';
+  const l = Object.entries(B).map(([cd, bh]) => ({cd, nome: MUN_IDX[cd]?.properties.NM_MUN, bh, w: c.mun[cd]?.area || 1, k: bh.campoAtual > 0 ? classeKs(bh.ksAtual) : -1, kf: bh.ksMinFutCampo == null ? -1 : classeKs(bh.ksMinFutCampo)})).filter(x => x.nome);
+  const tot = l.filter(x => x.k >= 0).reduce((t, x) => t + x.w, 0), totF = l.filter(x => x.kf >= 0).reduce((t, x) => t + x.w, 0);
+  const pct = (arr, key, T) => CLS_AG.map((_, k) => T ? 100 * arr.filter(x => x[key] === k).reduce((t, x) => t + x.w, 0) / T : 0);
+  const barra = v => `<div class="barra">${v.map((p, k) => `<i title="${CLS_AG[k].nome}: ${p.toFixed(0)}%" style="width:${p}%;background:${CLS_AG[k].cor}"></i>`).join('')}</div>`;
+  const ph = pct(l, 'k', tot), pf = pct(l, 'kf', totF);
+  const piores = l.filter(x => x.k >= 0 || x.kf >= 0).sort((a, b) => (a.bh.ksMinFutCampo ?? 1) - (b.bh.ksMinFutCampo ?? 1) || a.bh.atual - b.bh.atual).slice(0, 12);
+  return `<h3>Água no solo · ${esc(c.nome)} (estado)</h3><p>Hoje: ${ph.map((p, k) => `${CLS_AG[k].nome.toLowerCase()} <b>${p.toFixed(0)}%</b>`).join(' · ')} da área com lavoura em campo.</p>${barra(ph)}
+    <p style="margin-top:8px">Pior dia nos próximos 15 dias: ${pf.map((p, k) => `${CLS_AG[k].nome.toLowerCase()} <b>${p.toFixed(0)}%</b>`).join(' · ')}.</p>${barra(pf)}
+    <h4>Municípios com a situação mais restrita</h4><table class="tab-ag"><tr><th>Município</th><th>Água hoje</th><th>Ks hoje</th><th>Pior Ks 15 dias</th><th>Demanda atendida 30 d</th></tr>${piores.map(x => `<tr><td><a href="#" data-cd="${x.cd}" class="lk-mun">${esc(x.nome)}</a></td><td>${n0(x.bh.atual)}%</td><td>${x.k >= 0 ? `<span style="color:${CLS_AG[x.k].cor};font-weight:600">${n2(x.bh.ksAtual)}</span>` : '—'}</td><td>${x.kf >= 0 ? `<span style="color:${CLS_AG[x.kf].cor};font-weight:600">${n2(x.bh.ksMinFutCampo)}</span>` : '—'}</td><td>${x.bh.atend30 != null ? n0(x.bh.atend30) + '%' : '—'}</td></tr>`).join('')}</table>
+    <div class="nota">Porcentagens ponderadas pela área ${c.semFenologia ? 'mapeada' : 'informada na planilha'}. Clique no município para abrir a ficha dele.</div>`;
+}
+function abrirClima(alvo) {
+  const nome = alvo === ESTADO ? 'Mato Grosso do Sul' : alvo.properties.NM_MUN, c = cultAtual();
+  abrirModal(`Clima e água no solo · ${nome}${c ? ' · ' + c.nome : ''}`, htmlJanelaClima(alvo), 'larga');
+  document.querySelectorAll('#m-corpo .lk-mun').forEach(a => a.onclick = e => { e.preventDefault(); const f = MUN_IDX[a.dataset.cd]; if (!f) return; $('modal').hidden = true; mapa.fitBounds(L.geoJSON(f).getBounds(), {paddingBottomRight: [400, 0]}); selecionar(f); });
 }
 // gráfico do balanço: água no solo (% da disponível) com as faixas "água fácil" e "estresse" (limite = 1 − p da cultura),
 // chuva em barras e, embaixo, uma fita com a classe de Ks de cada dia
-function graficoAgua(bh) {
+function graficoAgua(bh, W = 300, H = 100) {
   const S = bh.serie, n = S.length; if (!n) return '';
-  const W = 300, H = 100, bw = W / n, y = v => H - Math.max(0, Math.min(100, v)) / 100 * H, xc = j => (j + .5) * bw;
+  const bw = W / n, y = v => H - Math.max(0, Math.min(100, v)) / 100 * H, xc = j => (j + .5) * bw;
   const pm = Math.max(20, ...S.map(s => s.chuva)), jh = S.findIndex(s => s.futuro), xh = jh < 0 ? W : jh * bw;
   const lim = S.map((s, j) => `${j ? 'L' : 'M'}${xc(j).toFixed(1)},${y(100 * (1 - s.p)).toFixed(1)}`).join('');
   const zonaEst = `M0,${H} L0,${y(100 * (1 - S[0].p)).toFixed(1)} ${lim.replace(/^M/, 'L')} L${W},${y(100 * (1 - S[n - 1].p)).toFixed(1)} L${W},${H} Z`;
@@ -869,37 +1007,46 @@ function graficoAgua(bh) {
     <text x="0" y="${H + 20}">${d(S[0])}</text>${jh > 0 ? `<text x="${xh}" y="${H + 20}" text-anchor="middle">hoje</text>` : ''}<text x="${W}" y="${H + 20}" text-anchor="end">${d(S[n - 1])}</text>
     <text x="0" y="${H + 34}"><tspan style="fill:var(--azul)">— água no solo (% da disponível)</tspan> <tspan style="fill:#2171b5">■ chuva (máx ${pm.toFixed(0)} mm)</tspan></text></svg>`;
 }
-function htmlAgua(f, c, m, mc) {
+function htmlAgua(f, c, m, mc, W) {
   const cd = String(+f.properties.CD_MUN), bh = bhCultura(c)?.[cd] || balancoHidrico(mc, cadMun(c.cid, cd), c, m, cd), kp = paramsKc(c);
   const k = bh.campoAtual > 0 ? classeKs(bh.ksAtual) : -1, cls = k < 0 ? 'Sem lavoura em campo' : CLS_AG[k].nome;
   let h = `<h3>Água no solo · ${esc(c.nome)}</h3>`;
   h += `<div class="kpis"><div class="kpi"><b>${n0(bh.atual)}%</b><span>água disponível hoje</span></div><div class="kpi"><b style="color:${k < 0 ? 'var(--suave)' : CLS_AG[k].cor}">${k < 0 ? '—' : n2(bh.ksAtual)}</b><span>Ks hoje · ${cls.toLowerCase()}</span></div><div class="kpi"><b>${bh.campoAtual > 0 ? n1(bh.etcHoje) : '—'}</b><span>demanda (mm/dia)</span></div></div>`;
-  h += graficoAgua(bh);
+  h += W ? graficoAgua(bh, W, Math.round(W / 4.2)) : graficoAgua(bh);
   const at = (a, dmd) => a == null ? '—' : `${a.toFixed(0)}% de ${dmd.toFixed(0)} mm`;
   h += `<table><tr><td>Demanda hoje (ET0 ${n1(bh.et0Hoje)} × Kc ${n2(bh.kcAtual)})</td><td>${bh.campoAtual > 0 ? n1(bh.etcHoje) + ' mm/dia' : '—'}</td></tr>
     <tr><td>Demanda atendida, últimos 30 dias</td><td>${at(bh.atend30, bh.dem30)}</td></tr><tr><td>Demanda atendida, próximos 15 dias</td><td>${at(bh.atendFut, bh.demFut)}</td></tr>
     <tr><td>Pior Ks previsto (15 dias)</td><td>${bh.ksMinFutCampo == null ? '—' : n2(bh.ksMinFutCampo)}</td></tr></table>`;
-  h += `<div class="nota">Reservatório de ~${bh.TAW.toFixed(0)} mm (textura do solo${soloCultura(c.cid, cd) ? ' sob a cultura' : ''}, 60 cm). A faixa de estresse começa abaixo de ~${(100 * (1 - (bh.pAtual ?? kp.p))).toFixed(0)}% (p de ${esc(c.nome.toLowerCase())} = ${n2(kp.p)}, ajustado pela demanda do dia). Fita colorida: classe de Ks de cada dia. Passe o mouse no gráfico para ver os valores diários.</div>`;
-  return h + htmlAguaCulturas(f);
+  h += `<div class="nota">Reservatório de ~${bh.TAW.toFixed(0)} mm (textura do solo${soloCultura(c.cid, cd) ? ' sob a cultura' : ''}, ${profRaiz(c)} cm de raízes). A faixa de estresse começa abaixo de ~${(100 * (1 - (bh.pAtual ?? kp.p))).toFixed(0)}% (p de ${esc(c.nome.toLowerCase())} = ${n2(kp.p)}, ajustado pela demanda do dia). Fita colorida: classe de Ks de cada dia. Passe o mouse no gráfico para ver os valores diários.</div>`;
+  const comp = htmlAguaCulturas(f);
+  return h + (comp ? `<details style="margin-top:8px"><summary class="nota" style="cursor:pointer;color:var(--tinta)">Comparar com as outras culturas em campo no município</summary>${comp}</details>` : '');
 }
 function htmlAguaCulturas(f) {   // compara todas as culturas da planilha com lavoura em campo no município
   if (!PL || !CL) return '';
   const cd = String(+f.properties.CD_MUN), mc = CL.mun[cd]; if (!mc) return '';
-  const linhas = [], safras = Object.keys(PL).sort().reverse();
-  for (const s of safras) for (const [n, c] of Object.entries(PL[s])) {
+  const linhas = [], safras = Object.keys(PL).sort().reverse(), fontes = safras.map(s => [s, PL[s]]);
+  if (CANA) fontes.push(['', {'Cana-de-açúcar': CANA}]);
+  for (const [s, P] of fontes) for (const [n, c] of Object.entries(P)) {
     const m = c.mun[cd]; if (!m || linhas.some(l => l.n === n)) continue;
     const bh = balancoHidrico(mc, cadMun(c.cid, cd), c, m, cd);
     if (!(bh.campoAtual > 0) && bh.ksMinFutCampo == null) continue;
     linhas.push({n, s, c, bh});
   }
   if (linhas.length < 2) return '';
+  linhas.sort((a, b) => (a.c === cultAtual() ? -1 : 0) - (b.c === cultAtual() ? -1 : 0));
   const cel = ks => { const k = classeKs(ks); return ks == null ? '—' : `<span style="color:${CLS_AG[k].cor};font-weight:600">${n2(ks)}</span>`; };
-  return `<h3>Todas as culturas em campo</h3><table class="tab-ag"><tr><th>Cultura</th><th>Kc</th><th>Demanda<br>mm/dia</th><th>Água</th><th>Ks hoje</th><th>Pior Ks<br>15 dias</th></tr>${linhas.map(({n, s, bh}) => `<tr><td>${esc(n)}${safras.length > 1 ? ` <span class="nota" style="margin:0">${esc(s)}</span>` : ''}</td><td>${bh.campoAtual > 0 ? n2(bh.kcAtual) : '—'}</td><td>${bh.campoAtual > 0 ? n1(bh.etcHoje) : '—'}</td><td>${n0(bh.atual)}%</td><td>${bh.campoAtual > 0 ? cel(bh.ksAtual) : '—'}</td><td>${cel(bh.ksMinFutCampo)}</td></tr>`).join('')}</table>
+  return `<table class="tab-ag"><tr><th>Cultura</th><th>Kc</th><th>Demanda<br>mm/dia</th><th>Água</th><th>Ks hoje</th><th>Pior Ks<br>15 dias</th></tr>${linhas.map(({n, s, bh}) => `<tr><td>${esc(n)}${safras.length > 1 ? ` <span class="nota" style="margin:0">${esc(s)}</span>` : ''}</td><td>${bh.campoAtual > 0 ? n2(bh.kcAtual) : '—'}</td><td>${bh.campoAtual > 0 ? n1(bh.etcHoje) : '—'}</td><td>${n0(bh.atual)}%</td><td>${bh.campoAtual > 0 ? cel(bh.ksAtual) : '—'}</td><td>${cel(bh.ksMinFutCampo)}</td></tr>`).join('')}</table>
     <div class="nota">Mesma chuva e mesmo clima, mas cada cultura tem sua demanda (Kc da fase) e sua tolerância (p), e o solo considerado é o das áreas da cultura quando mapeadas. Por isso a situação pode diferir entre culturas no mesmo município.</div>`;
 }
 function htmlGeral(f) {
-  const cd = String(+f.properties.CD_MUN), c = cultAtual(), m = c?.mun[cd]; let h = '';
-  if (c) {
+  const cd = String(+f.properties.CD_MUN), c = cultAtual(), m = c?.mun[cd], cid = c?.cid; let h = '';
+  if (c?.semFenologia) {
+    h += `<h3>${esc(c.nome)}</h3>`;
+    if (!m) h += `<div class="nota">Sem cana mapeada neste município no mapeamento da Aprosoja-MS.</div>`;
+    else { const tot = Object.values(c.mun).reduce((t, x) => t + x.area, 0), am = (+f.properties.AREA_KM2 || 0) * 100;
+      h += `<div class="kpis"><div class="kpi"><b>${n0(m.area / 1000)} mil</b><span>ha mapeados</span></div><div class="kpi"><b>${am ? n1(100 * m.area / am) + '%' : '—'}</b><span>da área do município</span></div><div class="kpi"><b>${n1(100 * m.area / tot)}%</b><span>da cana do MS</span></div></div>
+        <div class="nota">Mapeamento de uso e cobertura da Aprosoja-MS, safra 2025/26. A cana não tem acompanhamento fenológico na planilha.</div>`; }
+  } else if (c) {
     h += `<h3>${esc(c.nome)} · semana de ${fmtD(dataSem(c, semSel))}${dataSem(c, semSel) > HOJE ? ' (projeção)' : ''}</h3>`;
     if (!m) h += `<div class="nota">Sem dados de ${esc(c.nome)} para este município na planilha.</div>`;
     else {
@@ -909,18 +1056,16 @@ function htmlGeral(f) {
       const cal = calendarioCritico(c, m);
       if (cal.length) h += `<div class="nota" style="margin-top:8px">Metade da área semeada atinge (projeção):</div><table>${cal.map(([e, dt]) => `<tr><td>${esc(e)}</td><td>${dt ? fmtD(dt) : '—'}</td></tr>`).join('')}</table>`;
     }
-  } else h += `<div class="aviso">Conecte a pasta da equipe para ver plantio, fenologia, fotos e relatos.</div>`;
+  } else h += `<div class="aviso">Escolha uma cultura em “Safra e cultura” para filtrar a ficha${PL ? '' : ' (as culturas anuais aparecem ao conectar a pasta da equipe)'}.</div>`;
   const mc = CL?.mun[cd];
-  if (mc) { const h0 = iHoje(), s = (i0, i1) => mc.p.slice(Math.max(0, i0), i1).reduce((t, x) => t + (x || 0), 0);
-    h += `<h3>Clima</h3><div class="nota">Últimos 30 dias: ${s(h0 - 30, h0).toFixed(0)} mm (estimativa) · Próximos 15: ${s(h0, h0 + 15).toFixed(0)} mm (previsão) · ${diasSecos(mc)} dia${diasSecos(mc) === 1 ? '' : 's'} sem chuva</div>${graficoClima(mc)}`;
-    if (mc.tn.slice(h0, h0 + 15).some(t => t != null && t <= 3)) h += `<div style="color:var(--alerta);font-weight:600;font-size:12.5px">⚠ Previsão de mínima ≤ 3 °C: risco de geada</div>`;
-    if (c && m) h += htmlAgua(f, c, m, mc); }
-  const so = soloDoMunicipio(f);
-  if (so) { const tb = (o, cores) => Object.entries(o).filter(([, v]) => v >= .5).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td><i style="background:${cores[k] || '#bdbdbd'}"></i>${esc(k)}</td><td>${v.toFixed(0)}%</td></tr>`).join('');
-    h += `<h3>Solos (escala 1:5.000.000)</h3><table>${tb(so.ordem, CORES_ORDEM)}</table><table style="margin-top:6px">${tb(so.textura, CORES_TEX)}</table><div class="nota">Água disponível estimada: ~${so.cad.toFixed(0)} mm em 60 cm (pela textura).</div>`; }
-  h += htmlSoloCultura(cd);
-  const fts = FOTOS.filter(p => p.mun && String(+p.mun.properties.CD_MUN) === cd), rel = RELATOS.filter(r => r.muns.has(cd));
-  if (fts.length || rel.length) h += `<h3>Campo</h3><div class="nota">${fts.length} foto${fts.length === 1 ? '' : 's'}${fts.length ? ' (última em ' + fmtD(new Date(Math.max(...fts.map(p => p.data)))) + ')' : ''} · ${rel.length} relato${rel.length === 1 ? ' cita' : 's citam'} o município${rel.length ? ' (último: ' + esc(rel[0].nome) + ', ' + fmtD(rel[0].data) + ')' : ''}</div>`;
+  if (mc) h += htmlClimaResumo(mc, c && m ? bhCultura(c)?.[cd] : null, c);
+  const sc = c ? soloCultura(cid, cd) : null, so = soloDoMunicipio(f);
+  const tb = (o, cores) => Object.entries(o).filter(([, v]) => v >= .5).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td><i style="background:${cores[k] || '#bdbdbd'}"></i>${esc(k)}</td><td>${v.toFixed(0)}%</td></tr>`).join('');
+  if (sc) h += `<h3>Solos sob ${esc(c.nome.toLowerCase())} (${n0(sc.area)} ha mapeados)</h3><table>${tb(sc.textura, CORES_TEX)}</table><table style="margin-top:6px">${tb(sc.ordem, CORES_ORDEM)}</table><div class="nota">Mapa de uso da Aprosoja-MS × solos 1:5.000.000. Água disponível ~${(sc.cad * profRaiz(c) / 60).toFixed(0)} mm em ${profRaiz(c)} cm.</div>`;
+  else if (so) h += `<h3>Solos do município (1:5.000.000)</h3><table>${tb(so.ordem, CORES_ORDEM)}</table><table style="margin-top:6px">${tb(so.textura, CORES_TEX)}</table><div class="nota">${c ? `${esc(c.nome)} não tem mapa de uso: valores do município inteiro. ` : ''}Água disponível estimada: ~${so.cad.toFixed(0)} mm em 60 cm (pela textura).</div>`;
+  const fts = FOTOS.filter(p => p.mun && String(+p.mun.properties.CD_MUN) === cd && (!cid || p.cult === cid)), rel = RELATOS.filter(r => r.muns.has(cd) && (!cid || r.cults.has(cid)));
+  const outros = cid ? RELATOS.filter(r => r.muns.has(cd) && !r.cults.has(cid)).length : 0;
+  if (fts.length || rel.length || outros) h += `<h3>Campo${c ? ' · ' + esc(c.nome.toLowerCase()) : ''}</h3><div class="nota">${fts.length} foto${fts.length === 1 ? '' : 's'}${fts.length ? ' (última em ' + fmtD(new Date(Math.max(...fts.map(p => p.data)))) + ')' : ''} · ${rel.length} relato${rel.length === 1 ? '' : 's'}${rel.length ? ' (último: ' + esc(rel[0].nome) + ', ' + fmtD(rel[0].data) + ')' : ''}${outros ? ` · ${outros} outro${outros > 1 ? 's' : ''} cita${outros > 1 ? 'm' : ''} o município sem mencionar a cultura` : ''}</div>`;
   return h;
 }
 function calendarioCritico(c, m) {
@@ -966,14 +1111,16 @@ function estacaoProxima(lat, lon) {
   return melhor;
 }
 function gerarAnalise(f, soDados = false) {
-  const p = f.properties, cd = String(+p.CD_MUN), c = cultAtual(), m = c?.mun[cd], mc = CL?.mun[cd], so = soloDoMunicipio(f), sc = soloCultura(c?.cid, cd), cad = sc?.cad || so?.cad || 60;
+  const p = f.properties, cd = String(+p.CD_MUN), c = cultAtual(), m = c?.mun[cd], mc = CL?.mun[cd], so = soloDoMunicipio(f), sc = soloCultura(c?.cid, cd), cad = cadMun(c?.cid, cd);
   let bhR = null;
   const nome = esc(p.NM_MUN), out = [], atencao = []; let pontos = 0;
   const cult = c ? esc(c.nome.toLowerCase()) : null, cid = c?.cid;
   out.push(`<div class="aviso">Análise automática gerada a partir dos dados do painel em ${fmtDL(HOJE)}. É um apoio à decisão: indica situações a verificar e não substitui a observação de campo. Associações entre clima, solo e lavoura não implicam, por si, relação de causa.</div>`);
   // 1. situação da lavoura
   let dCrit = null, crit15 = 0;
-  if (c && m) {
+  if (c?.semFenologia) {
+    out.push(`<h4>Situação da lavoura</h4><p>${m ? `O mapeamento da Aprosoja-MS indica <b>${n0(m.area)} ha</b> de cana-de-açúcar em ${nome}${p.AREA_KM2 ? ` (${n1(100 * m.area / (p.AREA_KM2 * 100))}% da área do município)` : ''}.` : `Não há cana-de-açúcar mapeada em ${nome}.`} A cana não tem acompanhamento fenológico na planilha; a análise considera a área mapeada, os solos sob a cultura, o clima e o balanço hídrico com Kc médio anual de ${n2(KC_CANA)} e raízes até ${PROF_CANA} cm.</p>`);
+  } else if (c && m) {
     const pl = acum(m.serie, semSel), ant = acum(m.serie, semSel - 1), ms = mediaMS(c, x => acum(x.serie, semSel)), d = distrib(c, m, semSel);
     const dS = dataSem(c, semSel), proj = dS > HOJE;
     const domi = d.map((v, i) => [v, i]).filter(x => x[0] >= 1).sort((a, b) => b[0] - a[0]);
@@ -995,7 +1142,7 @@ function gerarAnalise(f, soDados = false) {
     let t = `Predominam ${esc(ord[0].toLowerCase())}s (${ord[1].toFixed(0)}% da área) com textura ${esc(tex[0].toLowerCase())} (${tex[1].toFixed(0)}%), o que corresponde a uma água disponível estimada de ~${so.cad.toFixed(0)} mm na camada de 60 cm.`;
     if (so.cad < 55) t += ' Solos de menor retenção de água tornam a lavoura mais sensível a veranicos curtos.'; else if (so.cad > 80) t += ' Solos de maior retenção amortecem veranicos curtos, mas podem dificultar operações após chuvas intensas.';
     if (sc) { const tc = Object.entries(sc.textura).sort((a, b) => b[1] - a[1]), oc = Object.entries(sc.ordem).sort((a, b) => b[1] - a[1])[0];
-      t += ` Considerando só as áreas de ${esc(sc.nome.toLowerCase())} do mapa de uso da Aprosoja-MS (${n0(sc.area)} ha), ${tc.slice(0, 2).map(([k, v]) => `${v.toFixed(0)}% estão em solos de textura ${esc(k.toLowerCase())}`).join(' e ')}, e ${oc[1].toFixed(0)}% em ${esc(oc[0].toLowerCase())}s; a água disponível nessas áreas é estimada em ~${sc.cad.toFixed(0)} mm, valor usado no balanço hídrico.`; }
+      t += ` Considerando só as áreas de ${esc(sc.nome.toLowerCase())} do mapa de uso da Aprosoja-MS (${n0(sc.area)} ha), ${tc.slice(0, 2).map(([k, v]) => `${v.toFixed(0)}% estão em solos de textura ${esc(k.toLowerCase())}`).join(' e ')}, e ${oc[1].toFixed(0)}% em ${esc(oc[0].toLowerCase())}s; a água disponível nessas áreas é estimada em ~${cad.toFixed(0)} mm${profRaiz(c) !== 60 ? ` (${profRaiz(c)} cm de raízes)` : ''}, valor usado no balanço hídrico.`; }
     out.push(`<h4>Solo</h4><p>${t} <span class="nota">(Mapa 1:5.000.000: valor regional, não do talhão.)</span></p>`);
   }
   // 3. clima e balanço hídrico
@@ -1008,18 +1155,21 @@ function gerarAnalise(f, soDados = false) {
     if (bh.fator.base.length && Math.abs(bh.fator.f - 1) >= .03)
       t += ` A ET0 do modelo foi ajustada por um fator de ${bh.fator.f.toFixed(2).replace('.', ',')}, obtido da comparação com a ET0 Penman-Monteith calculada nas estações INMET próximas (o modelo ficou ${bh.fator.base.slice(0, 2).map(b => n1(Math.abs(b.vies_pct)) + '% ' + (b.vies_pct > 0 ? 'acima' : 'abaixo') + ' em ' + esc(b.nome)).join(' e ')}).`;
     if (bh.atual != null) {
-      t += ` O balanço hídrico da zona radicular (FAO-56; água disponível ~${cad.toFixed(0)} mm pela textura${sc ? ' das áreas da cultura' : ''}${kp ? `; Kc de ${esc(c.nome.toLowerCase())} ${kp.fonte === 'FAO-56' ? 'da FAO-56' : 'da planilha'}, hoje ~${n1(bh.kcAtual)} na área semeada; p = ${n1(bh.pAtual)}` : ''}) indica <b>${bh.atual.toFixed(0)}%</b> da água disponível no solo`;
+      t += ` O balanço hídrico da zona radicular (FAO-56; água disponível ~${cad.toFixed(0)} mm pela textura${sc ? ' das áreas da cultura' : ''}${kp ? `; Kc de ${esc(c.nome.toLowerCase())} ${c.semFenologia ? 'médio anual' : kp.fonte === 'FAO-56' ? 'da FAO-56' : 'da planilha'}, hoje ~${n2(bh.kcAtual)}${c.semFenologia ? '' : ' na área semeada'}; p = ${n2(bh.pAtual)}` : ''}) indica <b>${bh.atual.toFixed(0)}%</b> da água disponível no solo`;
       t += bh.ksAtual < 1 ? `, já abaixo do limite de fácil absorção: há <b>restrição hídrica</b> (Ks = ${bh.ksAtual.toFixed(2).replace('.', ',')}; a planta transpira ~${(100 * bh.ksAtual).toFixed(0)}% do potencial)` : ', sem restrição hídrica (Ks = 1)';
       t += bh.diasEstresse ? `. Nos últimos 30 dias, houve ${bh.diasEstresse} dia${bh.diasEstresse > 1 ? 's' : ''} com restrição (evapotranspiração real ${n0(bh.eta30)} mm frente a ${n0(bh.etc30)} mm potenciais).` : '.';
       if (bh.ksAtual < 1 && m) { pontos += 2; atencao.push(`Restrição hídrica atual (Ks ${bh.ksAtual.toFixed(2).replace('.', ',')}; ${bh.atual.toFixed(0)}% da água disponível)${dCrit ? ', com fases críticas se aproximando' : ''}.`); }
     }
     out.push(`<h4>Clima recente e água no solo</h4><p>${t}</p>`);
-    let tp = `A previsão para os próximos 15 dias indica <b>${p15.toFixed(0)} mm</b> de chuva para ${et15.toFixed(0)} mm de evapotranspiração de referência${Math.abs(bh.fator.f - 1) >= .03 ? ` (${(et15 * bh.fator.f).toFixed(0)} mm após o ajuste pelas estações)` : ''}.`;
+    const c15 = concordancia(totaisModelos(mc, h, h + 15)), c7 = concordancia(totaisModelos(mc, h, h + 7));
+    let tp = `A previsão para os próximos 15 dias${mc.mod ? ` (média de ${Object.keys(mc.mod).length} modelos)` : ''} indica <b>${p15.toFixed(0)} mm</b> de chuva para ${et15.toFixed(0)} mm de evapotranspiração de referência${Math.abs(bh.fator.f - 1) >= .03 ? ` (${(et15 * bh.fator.f).toFixed(0)} mm após o ajuste pelas estações)` : ''}.`;
+    if (c7) tp += ` Para os próximos 7 dias, os modelos variam de ${c7.mn.toFixed(0)} a ${c7.mx.toFixed(0)} mm (concordância ${c7.nivel})${c15 ? `; em 15 dias, de ${c15.mn.toFixed(0)} a ${c15.mx.toFixed(0)} mm entre os ${c15.n} modelos que cobrem o período (concordância ${c15.nivel})` : ''}.`;
+    if (c7?.nivel === 'baixa') tp += ' A divergência entre os modelos indica previsão de chuva incerta: acompanhar as atualizações diárias.';
     if (bh.minFut != null) tp += ` Mantida a previsão, a água no solo deve chegar a no mínimo ${bh.minFut.toFixed(0)}% da disponível${bh.diasEstresseFut ? `, com ${bh.diasEstresseFut} dia${bh.diasEstresseFut > 1 ? 's' : ''} de restrição hídrica (Ks mínimo ${bh.ksMinFut.toFixed(2).replace('.', ',')})` : ', sem restrição hídrica'}.`;
     if (quente) { tp += ` Há ${quente} dia${quente > 1 ? 's' : ''} com máxima prevista ≥ 35 °C.`; if (m && crit15 >= 20) { pontos += 1; atencao.push(`Calor (≥ 35 °C) previsto com ${crit15.toFixed(0)}% da área em fases críticas: risco de abortamento de flores/estruturas.`); } }
     if (geada) { tp += ` Há ${geada} dia${geada > 1 ? 's' : ''} com mínima prevista ≤ 3 °C.`; if (['trigo', 'aveia', 'milho2', 'feijao2'].includes(cid) && m) { pontos += 2; atencao.push('Risco de geada previsto para cultura sensível em ciclo de inverno/segunda safra.'); } }
     if (bh.diasEstresseFut && m && crit15 >= 20) { pontos += 1; atencao.push('Previsão de restrição hídrica coincidindo com fases críticas.'); }
-    if (m && p15 > 120) { const dist = distrib(c, m, semSel), fim = dist.reduce((t, v, i) => t + (i >= dist.length - 2 ? v : 0), 0); if (fim >= 20) { pontos += 1; atencao.push(`Chuva elevada prevista (${p15.toFixed(0)} mm) com ${fim.toFixed(0)}% da área em maturação/colheita: risco de perdas de qualidade e atraso na colheita.`); } }
+    if (m && !c.semFenologia && p15 > 120) { const dist = distrib(c, m, semSel), fim = dist.reduce((t, v, i) => t + (i >= dist.length - 2 ? v : 0), 0); if (fim >= 20) { pontos += 1; atencao.push(`Chuva elevada prevista (${p15.toFixed(0)} mm) com ${fim.toFixed(0)}% da área em maturação/colheita: risco de perdas de qualidade e atraso na colheita.`); } }
     out.push(`<h4>Previsão (15 dias)</h4><p>${tp}</p>`);
     const ep = estacaoProxima(...(() => { const ct = turf.centroid(f).geometry.coordinates; return [ct[1], ct[0]]; })());
     if (ep) { const ds = Object.keys(ep.e.serie).slice(-30), pe = ds.reduce((t, d) => t + (ep.e.serie[d].p || 0), 0);
@@ -1027,14 +1177,16 @@ function gerarAnalise(f, soDados = false) {
   }
   // 4. campo
   const fts = FOTOS.filter(x => x.mun && String(+x.mun.properties.CD_MUN) === cd && (!cid || x.cult === cid));
-  const rels = RELATOS.filter(r => r.muns.has(cd)).sort((a, b) => (b.cults.has(cid) - a.cults.has(cid)) || (b.data - a.data));
+  const rels = RELATOS.filter(r => r.muns.has(cd) && (!cid || r.cults.has(cid))).sort((a, b) => b.data - a.data);
+  const relOutros = cid ? RELATOS.filter(r => r.muns.has(cd) && !r.cults.has(cid)).length : 0;
   let tc = '';
   if (fts.length) tc += `<p>${fts.length} foto${fts.length > 1 ? 's' : ''} de ${cult || 'lavouras'} no município, a mais recente de ${fmtD(new Date(Math.max(...fts.map(x => x.data))))}.</p>`;
-  if (rels.length) { tc += `<p>${rels.length} relato${rels.length > 1 ? 's' : ''} de viagem cita${rels.length > 1 ? 'm' : ''} ${nome}. Trechos mais relevantes:</p>`;
+  if (rels.length) { tc += `<p>${rels.length} relato${rels.length > 1 ? 's' : ''} de viagem cita${rels.length > 1 ? 'm' : ''} ${nome}${cid ? ' e ' + cult : ''}. Trechos mais relevantes:</p>`;
     rels.slice(0, 3).forEach(r => { const tr = trechos(r, p.NM_MUN, cid); tc += `<div class="nota"><b>${esc(r.nome)}</b> · ${fmtD(r.data)}</div>${tr.map(x => `<div class="trecho">“${esc(x)}”</div>`).join('') || '<div class="trecho">(o município é citado, sem trecho destacado)</div>'}`; }); }
   const ultVisita = Math.max(0, ...fts.map(x => +x.data), ...rels.map(r => +r.data));
   if (!ultVisita || HOJE - ultVisita > 30 * 864e5) { if (m) { pontos += 1; atencao.push('Sem fotos ou relatos de campo nos últimos 30 dias para este município.'); } }
-  out.push(`<h4>Informações de campo</h4>${tc || '<p>Nenhuma foto ou relato da pasta da equipe se refere a este município.</p>'}`);
+  if (relOutros) tc += `<p class="nota">${relOutros} outro${relOutros > 1 ? 's' : ''} relato${relOutros > 1 ? 's' : ''} cita${relOutros > 1 ? 'm' : ''} o município sem mencionar ${cult}.</p>`;
+  out.push(`<h4>Informações de campo${cult ? ' (' + cult + ')' : ''}</h4>${tc || `<p>Nenhuma foto ou relato da pasta da equipe se refere a ${cult ? cult + ' neste município' : 'este município'}.</p>`}`);
   // 5. síntese
   const nivel = pontos >= 5 ? ['Alta', '#b5452f'] : pontos >= 3 ? ['Média', '#d9822b'] : ['Baixa', '#5f8f2a'];
   if (soDados) return {cd, nome: p.NM_MUN, pontos, nivel, atencao, ks: bhR?.ksAtual, ksFut: bhR?.ksMinFut, diasFut: bhR?.diasEstresseFut, area: m?.area || 0, crit15};
@@ -1071,8 +1223,15 @@ function regioes(c, j) {
     return {r, n: Object.keys(o.mun).length, area: Object.values(o.mun).reduce((t, m) => t + (m.area || 0), 0), pl: pl?.v ?? 0, cr: cr?.v ?? 0, av: (pl?.v ?? 0) - (ant?.v ?? 0)}; });
 }
 function htmlGeralEstado() {
-  const c = cultAtual(); let h = '';
-  if (c) {
+  const c = cultAtual(), cid = c?.cid; let h = '';
+  if (c?.semFenologia) {
+    const l = Object.entries(c.mun).map(([cd, m]) => ({cd, m, f: MUN_IDX[cd]})).filter(x => x.f), tot = l.reduce((t, x) => t + x.m.area, 0);
+    const reg = {}; l.forEach(x => { const r = x.f.properties.NM_RGI || '—'; reg[r] = (reg[r] || 0) + x.m.area; });
+    h += `<h3>${esc(c.nome)}</h3><div class="kpis"><div class="kpi"><b>${n1(tot / 1e6)} mi</b><span>ha mapeados no MS</span></div><div class="kpi"><b>${l.filter(x => x.m.area >= 100).length}</b><span>municípios com ≥ 100 ha</span></div><div class="kpi"><b>${Object.keys(reg).length}</b><span>regiões imediatas com cana</span></div></div>
+      <h3>Maiores áreas</h3><table>${l.sort((a, b) => b.m.area - a.m.area).slice(0, 8).map(x => `<tr><td>${esc(x.f.properties.NM_MUN)}</td><td>${n0(x.m.area)} ha · ${n1(100 * x.m.area / tot)}%</td></tr>`).join('')}</table>
+      <h3>Por região imediata</h3><table>${Object.entries(reg).sort((a, b) => b[1] - a[1]).map(([r, v]) => `<tr><td>${esc(r)}</td><td>${n0(v)} ha · ${n1(100 * v / tot)}%</td></tr>`).join('')}</table>
+      <div class="nota">Mapeamento de uso e cobertura da Aprosoja-MS.</div>`;
+  } else if (c) {
     const pl = mediaMS(c, m => acum(m.serie, semSel)), cr = mediaMS(c, m => pctCritico(c, m, semSel)), se = serieEstado(c), n = Object.keys(c.mun).length;
     h += `<h3>${esc(c.nome)} · semana de ${fmtD(dataSem(c, semSel))}${dataSem(c, semSel) > HOJE ? ' (projeção)' : ''}</h3>`;
     h += `<div class="kpis"><div class="kpi"><b>${pl ? pl.v.toFixed(0) : 0}%</b><span>plantado no MS${pl && !pl.pond ? ' (média simples)' : ''}</span></div><div class="kpi"><b>${cr ? cr.v.toFixed(0) : 0}%</b><span>em fase crítica</span></div><div class="kpi"><b>${se.area ? (se.area / 1e6).toLocaleString('pt-BR', {maximumFractionDigits: 1}) + ' mi' : '—'}</b><span>ha informados · ${n} munic.</span></div></div>`;
@@ -1082,15 +1241,19 @@ function htmlGeralEstado() {
     const cal = calendarioCritico(c, se);
     if (cal.length) h += `<div class="nota" style="margin-top:8px">Metade da área semeada no estado atinge (projeção):</div><table>${cal.map(([e, dt]) => `<tr><td>${esc(e)}</td><td>${dt ? fmtD(dt) : '—'}</td></tr>`).join('')}</table>`;
     h += `<h3>Por região imediata</h3><table>${regioes(c, semSel).sort((a, b) => b.area - a.area || a.r.localeCompare(b.r)).map(r => `<tr><td>${esc(r.r)} <span class="nota" style="margin:0">(${r.n})</span></td><td>${r.pl.toFixed(0)}% · crít. ${r.cr.toFixed(0)}%</td></tr>`).join('')}</table>`;
-  } else h += `<div class="aviso">Conecte a pasta da equipe para ver plantio, fenologia, fotos e relatos do estado.</div>`;
-  const ce = climaEstado(c);
-  if (ce) { const mc = ce.mc, h0 = iHoje(), s = (i0, i1) => mc.p.slice(Math.max(0, i0), i1).reduce((t, x) => t + (x || 0), 0);
-    const geada = ce.cds.filter(cd => CL.mun[cd].tn.slice(h0, h0 + 15).some(t => t != null && t <= 3)).length;
-    h += `<h3>Clima ${c ? 'nas áreas de ' + esc(c.nome.toLowerCase()) : 'no estado'}</h3><div class="nota">Média ${c ? 'ponderada pela área da cultura' : 'dos municípios'} · últimos 30 dias: ${s(h0 - 30, h0).toFixed(0)} mm (estimativa) · próximos 15: ${s(h0, h0 + 15).toFixed(0)} mm (previsão)</div>${graficoClima(mc)}`;
-    if (geada) h += `<div style="color:var(--alerta);font-weight:600;font-size:12.5px">⚠ ${geada} município${geada > 1 ? 's' : ''} com previsão de mínima ≤ 3 °C nos próximos 15 dias</div>`; }
-  h += htmlSoloCultura(null);
-  if (FOTOS.length || RELATOS.length) { const pc = {}; FOTOS.forEach(p => pc[p.cult] = (pc[p.cult] || 0) + 1);
-    h += `<h3>Campo</h3><div class="nota">${FOTOS.length} fotos (${Object.entries(pc).map(([k, v]) => `${esc((CULT[k] || OUTRA).nome)} ${v}`).join(', ')}) · ${RELATOS.length} relatos${RELATOS.length ? ' (último: ' + esc(RELATOS[0].nome) + ', ' + fmtD(RELATOS[0].data) + ')' : ''}</div>`; }
+  } else h += `<div class="aviso">Escolha uma cultura em “Safra e cultura” para filtrar a visão do estado${PL ? '' : ' (as culturas anuais aparecem ao conectar a pasta da equipe)'}.</div>`;
+  if (CL) { const pesos = {}; if (c) for (const [k, m] of Object.entries(c.mun)) pesos[k] = m.area || 1; else for (const k in CL.mun) pesos[k] = 1;
+    const ce = climaPonderado(pesos);
+    if (ce) { let k3 = null; if (c) { let sw = 0, sr = 0; for (const [k, b] of Object.entries(bhCultura(c) || {})) { if (!(b.campoAtual > 0)) continue; const w = c.mun[k]?.area || 1; sw += w; if (b.ksAtual < .99) sr += w; }
+        if (sw) k3 = `<div class="kpi"><b style="color:${sr / sw >= .2 ? CLS_AG[2].cor : 'var(--tinta)'}">${(100 * sr / sw).toFixed(0)}%</b><span>da área com restrição hídrica hoje</span></div>`; }
+      h += htmlClimaResumo(ce.mc, null, c, k3).replace('<h3>Clima e água no solo</h3>', `<h3>Clima e água no solo${c ? ' · áreas de ' + esc(c.nome.toLowerCase()) : ''}</h3>`); } }
+  const sc = c ? soloCultura(cid, null) : null;
+  if (sc) { const tb = (o, cores) => Object.entries(o).filter(([, v]) => v >= .5).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td><i style="background:${cores[k] || '#bdbdbd'}"></i>${esc(k)}</td><td>${v.toFixed(0)}%</td></tr>`).join('');
+    h += `<h3>Solos sob ${esc(c.nome.toLowerCase())} no MS</h3><table>${tb(sc.textura, CORES_TEX)}</table><table style="margin-top:6px">${tb(sc.ordem, CORES_ORDEM)}</table><div class="nota">${n0(sc.area)} ha mapeados (Aprosoja-MS) × solos 1:5.000.000.</div>`; }
+  else if (!c) h += htmlSoloCultura(null);
+  const fts = FOTOS.filter(p => !cid || p.cult === cid), rels = RELATOS.filter(r => !cid || r.cults.has(cid));
+  if (fts.length || rels.length) { const pc = {}; fts.forEach(p => pc[p.cult] = (pc[p.cult] || 0) + 1);
+    h += `<h3>Campo${c ? ' · ' + esc(c.nome.toLowerCase()) : ''}</h3><div class="nota">${fts.length} foto${fts.length === 1 ? '' : 's'}${c ? '' : ` (${Object.entries(pc).map(([k, v]) => `${esc((CULT[k] || OUTRA).nome)} ${v}`).join(', ')})`} · ${rels.length} relato${rels.length === 1 ? '' : 's'}${rels.length ? ' (último: ' + esc(rels[0].nome) + ', ' + fmtD(rels[0].data) + ')' : ''}</div>`; }
   return h;
 }
 function trechosCultura(rel, cid, max = 2) {
@@ -1101,7 +1264,11 @@ function gerarAnaliseEstado() {
   const c = cultAtual(), out = [], cid = c?.cid, cult = c ? esc(c.nome.toLowerCase()) : null;
   out.push(`<div class="aviso">Análise automática do estado gerada em ${fmtDL(HOJE)} a partir dos dados do painel. Indica situações a verificar e não substitui o levantamento de campo; associações entre indicadores não implicam causa.</div>`);
   if (!c) { out.push('<p>Conecte a pasta da equipe para gerar a análise estadual por cultura.</p>'); return out.join(''); }
-  // 1. plantio
+  // 1. plantio (cana: área mapeada)
+  if (c.semFenologia) {
+    const l = Object.entries(c.mun).filter(([cd]) => MUN_IDX[cd]).sort((a, b) => b[1].area - a[1].area), tot = l.reduce((t, [, m]) => t + m.area, 0);
+    out.push(`<h4>Área da cultura</h4><p>O mapeamento da Aprosoja-MS indica <b>${n1(tot / 1e6)} milhão${tot >= 2e6 ? 'ões' : ''} de ha</b> de cana-de-açúcar em Mato Grosso do Sul. Os maiores municípios são ${l.slice(0, 5).map(([cd, m]) => `${esc(MUN_IDX[cd].properties.NM_MUN)} (${n0(m.area / 1000)} mil ha)`).join(', ')}. A cana não tem acompanhamento fenológico na planilha; as demais seções usam a área mapeada como peso.</p>`);
+  } else {
   const pl = mediaMS(c, m => acum(m.serie, semSel)), ant = mediaMS(c, m => acum(m.serie, semSel - 1)), se = serieEstado(c), dS = dataSem(c, semSel);
   const regs = regioes(c, semSel).filter(r => r.area || r.n).sort((a, b) => b.pl - a.pl);
   let t = `${dS > HOJE ? 'A projeção para a semana de ' + fmtD(dS) + ' indica' : 'Até a semana de ' + fmtD(dS) + ', a semeadura de ' + cult + ' em Mato Grosso do Sul atingiu'} <b>${pl ? pl.v.toFixed(0) : 0}%</b> da área${pl?.pond ? ' (média ponderada pela área informada)' : ''}, com avanço de ${pl && ant ? (pl.v - ant.v).toFixed(0) : 0} pontos percentuais na última semana.`;
@@ -1109,6 +1276,7 @@ function gerarAnaliseEstado() {
   out.push(`<h4>Situação da safra no estado</h4><p>${t}</p>`);
   const cal = calendarioCritico(c, se).filter(x => x[1]); let crit15 = 0; for (let j = semSel; j <= semSel + 2; j++) crit15 = Math.max(crit15, mediaMS(c, m => pctCritico(c, m, j))?.v || 0);
   if (cal.length) out.push(`<p>Pela projeção, metade da área semeada no estado entra em ${esc(cal[0][0])} por volta de <b>${fmtD(cal[0][1])}</b>${cal.length > 1 ? ` e em ${esc(cal.at(-1)[0])} por volta de ${fmtD(cal.at(-1)[1])}` : ''}. ${crit15 >= 1 ? `Nas próximas três semanas, até <b>${crit15.toFixed(0)}%</b> da área estará em fases críticas.` : 'Nas próximas três semanas, a área ainda não deve estar em fases críticas.'}</p>`);
+  }
   // 2. solos da cultura
   const sc = soloCultura(cid, null);
   if (sc) { const tc = Object.entries(sc.textura).sort((a, b) => b[1] - a[1]), oc = Object.entries(sc.ordem).sort((a, b) => b[1] - a[1]);
@@ -1117,7 +1285,7 @@ function gerarAnaliseEstado() {
   const linhas = []; let aR = 0, aRF = 0, aT = 0;
   if (CL) for (const [cd, m] of Object.entries(c.mun)) {
     const mc = CL.mun[cd], f = MUN_IDX[cd]; if (!mc || !f) continue;
-    const cad = soloCultura(cid, cd)?.cad || soloDoMunicipio(f)?.cad || 60, bh = balancoHidrico(mc, cad, c, m, cd), w = m.area || 1;
+    const cad = cadMun(cid, cd), bh = balancoHidrico(mc, cad, c, m, cd), w = m.area || 1;
     aT += w; if (bh.ksAtual < 1) aR += w; if (bh.diasEstresseFut) aRF += w; linhas.push({cd, nome: f.properties.NM_MUN, w, bh});
   }
   if (aT) {
@@ -1128,7 +1296,8 @@ function gerarAnaliseEstado() {
   if (ce) { const mc = ce.mc, h0 = iHoje(), s = (k, i0, i1) => mc[k].slice(Math.max(0, i0), i1).reduce((t, x) => t + (x || 0), 0);
     const geada = ce.cds.filter(cd => CL.mun[cd].tn.slice(h0, h0 + 15).some(t => t != null && t <= 3)).map(cd => MUN_IDX[cd]?.properties.NM_MUN).filter(Boolean);
     const calor = ce.cds.filter(cd => CL.mun[cd].tx.slice(h0, h0 + 15).some(t => t != null && t >= 35)).length;
-    out.push(`<h4>Clima nas áreas da cultura</h4><p>Nos últimos 30 dias, a chuva média ponderada pela área foi de ${s('p', h0 - 30, h0).toFixed(0)} mm (estimativa de modelo), e a previsão para os próximos 15 dias é de ${s('p', h0, h0 + 15).toFixed(0)} mm. ${calor ? `${calor} município${calor > 1 ? 's' : ''} com a cultura ${calor > 1 ? 'têm' : 'tem'} máxima prevista ≥ 35 °C. ` : ''}${geada.length ? `Há previsão de mínima ≤ 3 °C em ${geada.length} município${geada.length > 1 ? 's' : ''} (${geada.slice(0, 6).map(esc).join(', ')}${geada.length > 6 ? '…' : ''}).` : ''}</p>`); }
+    const pz = {}; for (const [k, m] of Object.entries(c.mun)) pz[k] = m.area || 1; const cp = climaPonderado(pz)?.mc, c7 = cp ? concordancia(totaisModelos(cp, h0, h0 + 7)) : null;
+    out.push(`<h4>Clima nas áreas da cultura</h4><p>Nos últimos 30 dias, a chuva média ponderada pela área foi de ${s('p', h0 - 30, h0).toFixed(0)} mm (estimativa de modelo), e a previsão para os próximos 15 dias é de ${s('p', h0, h0 + 15).toFixed(0)} mm${c7 ? `; nos próximos 7 dias os modelos variam de ${c7.mn.toFixed(0)} a ${c7.mx.toFixed(0)} mm (concordância ${c7.nivel})` : ''}. ${calor ? `${calor} município${calor > 1 ? 's' : ''} com a cultura ${calor > 1 ? 'têm' : 'tem'} máxima prevista ≥ 35 °C. ` : ''}${geada.length ? `Há previsão de mínima ≤ 3 °C em ${geada.length} município${geada.length > 1 ? 's' : ''} (${geada.slice(0, 6).map(esc).join(', ')}${geada.length > 6 ? '…' : ''}).` : ''}</p>`); }
   // 4. campo
   const fts = FOTOS.filter(x => x.cult === cid), rels = RELATOS.filter(r => r.cults.has(cid));
   let tc = `<p>${fts.length} foto${fts.length === 1 ? '' : 's'} de ${cult} e ${rels.length} relato${rels.length === 1 ? '' : 's'} que citam a cultura.</p>`;
@@ -1146,7 +1315,7 @@ function gerarAnaliseEstado() {
 // =====================================================================
 // METODOLOGIA (somente leitura)
 // =====================================================================
-function abrirModal(tit, html) { $('m-tit').textContent = tit; $('m-corpo').innerHTML = html; $('modal').hidden = false; }
+function abrirModal(tit, html, classe) { $('m-tit').textContent = tit; $('m-corpo').innerHTML = html; $('modal').querySelector('.caixa').classList.toggle('larga', classe === 'larga'); $('modal').hidden = false; $('m-corpo').scrollTop = 0; }
 $('m-fechar').onclick = () => { $('modal').hidden = true; };
 $('modal').onclick = e => { if (e.target.id === 'modal') $('modal').hidden = true; };
 document.addEventListener('keydown', e => { if (e.key === 'Escape') $('modal').hidden = true; });
@@ -1161,7 +1330,8 @@ const METODOLOGIA = `
 <tr><td>Uso e cobertura (soja, cana etc.)</td><td>Mapeamento vetorial de uso e cobertura de soja e cana-de-açúcar da Aprosoja-MS (arquivo MS26S1UCS), safra 2025/26; cada classe é exibida como camada</td><td>Quando novos arquivos são enviados</td></tr>
 <tr><td>Rodovias federais e estaduais</td><td>Base vetorial de rodovias de MS fornecida à SEGEO-MS (nome, jurisdição, revestimento, extensão)</td><td>Quando novos arquivos são enviados</td></tr>
 <tr><td>Evolução do plantio</td><td>Planilha semanal preenchida pelos técnicos da SEGEO-MS (% acumulado da área plantada por município)</td><td>Semanal, lida da pasta da equipe</td></tr>
-<tr><td>Previsão e estimativa diária por município</td><td>Open-Meteo (combinação de modelos ECMWF, GFS, ICON e outros), no ponto central de cada município</td><td>Diária (06h)</td></tr>
+<tr><td>Previsão diária por município (16 dias)</td><td>Open-Meteo: média de seis modelos globais (ECMWF IFS, NOAA GFS, DWD ICON, CMC GEM, JMA e UK Met Office), no ponto central de cada município, com a faixa entre os modelos</td><td>Diária (06h)</td></tr>
+<tr><td>Estimativa dos últimos 92 dias por município</td><td>Open-Meteo, opção “best match”: o modelo de maior resolução disponível para o local (um modelo, não média)</td><td>Diária (06h)</td></tr>
 <tr><td>Histórico diário por município</td><td>Reanálise ERA5 (Copernicus/ECMWF) via Open-Meteo Archive desde 01/07/2025, complementada pela análise do modelo nos dias mais recentes</td><td>Diária, acumulativa</td></tr>
 <tr><td>Estações meteorológicas</td><td>INMET, estações automáticas de MS (arquivo anual de dados históricos)</td><td>Diária; o INMET publica com algumas semanas de atraso</td></tr>
 <tr><td>Fotos e relatos de campo</td><td>Pasta compartilhada da equipe (ConabCloud)</td><td>Sempre que a pasta é conectada</td></tr></table>
@@ -1173,6 +1343,10 @@ const METODOLOGIA = `
 <p>Para cada cultura, a aba “Parâmetros” da planilha define a data da primeira semana e o número de dias após a semeadura em que começa cada estádio (ciclo médio, valores de referência ajustáveis pela equipe). A área semeada em cada semana é deslocada no tempo segundo esses dias, arredondados para semanas inteiras. A fração da área em um estádio é a diferença entre a área que já atingiu esse estádio e a que já atingiu o seguinte. Quando uma semana não é preenchida, repete-se o último valor informado. A data em que “metade da área semeada” atinge um estádio é calculada sobre o total semeado até o momento.</p>
 <p>As médias do estado são ponderadas pela área estimada informada na planilha; sem área, usa-se média simples (indicado no painel).</p>
 <h3>6. Clima por município</h3>
+<p><b>Previsão por vários modelos.</b> Para os próximos 16 dias, a rotina diária pede ao Open-Meteo a previsão de cada modelo separadamente e calcula, para cada dia e município, a média dos modelos disponíveis naquele dia (chuva, temperaturas, vento e ET0). O horizonte varia: ICON e UKMO cobrem cerca de 7 dias, GEM 10, JMA 11, ECMWF 15 e GFS 16; nos últimos dias da previsão a média usa menos modelos (indicado no gráfico). A média de vários modelos costuma errar menos que um modelo isolado, principalmente a partir do 4º ou 5º dia, mas suaviza chuvas intensas e localizadas. Por isso o painel mostra também a faixa entre os modelos e os totais de cada um. <b>Concordância</b> (convenção do painel, sobre o total de chuva do período): alta quando a diferença entre o modelo mais chuvoso e o mais seco é de até 40% da média ou até 10 mm; média até 80% ou 20 mm; baixa acima disso. A camada de clima tem a variável “Divergência entre modelos”, com essa diferença em mm.</p>
+<p><b>Dias passados.</b> Os últimos 92 dias vêm da opção “best match” do Open-Meteo, que usa, para cada local, o modelo de maior resolução disponível (um único modelo, sem média). Cerca de 5 dias depois, o histórico permanente passa a usar a reanálise ERA5, recalculada com observações.</p>
+<p><b>Chuva do modelo × estações INMET.</b> Para cada estação automática do INMET em MS, a rotina compara a chuva diária medida com a do modelo no ponto da estação (reanálise ERA5 e estimativa recente): totais, viés, correlação diária e das somas semanais, porcentagem de dias em que estação e modelo concordam sobre chover ou não (limiar de 1 mm) e porcentagem dos dias chuvosos da estação que o modelo detectou. Essa comparação é só descritiva: a chuva não é corrigida, porque o erro do modelo na chuva varia muito de um evento para outro. Ela aparece na janela de clima.</p>
+<p><b>Janela de clima.</b> O botão “Abrir clima e água no solo”, na ficha do município ou do estado, abre a previsão por modelo, os últimos 30 dias, a comparação com a estação INMET mais próxima e o balanço hídrico da cultura escolhida. No estado, os valores são médias dos municípios ponderadas pela área da cultura.</p>
 <p>Os valores representam o ponto central (centróide) de cada município. Para os dias passados, são <b>estimativas de modelo ou reanálise</b>, não medições; as estações do INMET são exibidas como referência observada. Indicadores: chuva acumulada, chuva menos evapotranspiração de referência (FAO-56, Penman-Monteith), temperaturas extremas, amplitude térmica, vento máximo e dias seguidos sem chuva (dias com menos de 1 mm).</p>
 <h3>7. Evapotranspiração e balanço hídrico</h3>
 <p><b>Evapotranspiração de referência (ET0).</b> Vem da Open-Meteo (variável <i>et0_fao_evapotranspiration</i>), calculada pelo método FAO-56 Penman-Monteith (Allen et al., 1998) com temperatura, umidade, vento a 2 m, radiação solar e pressão estimados pelos modelos (previsão) ou pela reanálise ERA5 (histórico). As variáveis de entrada são estimadas por modelo no ponto central do município, e não medidas.</p>
@@ -1180,6 +1354,8 @@ const METODOLOGIA = `
 <p><b>Coeficiente de cultura (Kc).</b> Os valores de referência são os da FAO-56 (tabela 12) para cada cultura (Kc inicial / médio / final): soja 0,40 / 1,15 / 0,50; milho 0,30 / 1,20 / 0,60; sorgo 0,30 / 1,05 / 0,55; amendoim 0,40 / 1,15 / 0,60; arroz 1,05 / 1,20 / 0,75; feijão 0,40 / 1,15 / 0,35; algodão 0,35 / 1,18 / 0,60; trigo 0,30 / 1,15 / 0,30; aveia 0,30 / 1,15 / 0,25. Podem ser substituídos pela equipe na aba Parâmetros da planilha. A curva de Kc segue os estádios da planilha: valor inicial até o segundo estádio, subida linear até o primeiro estádio crítico, valor médio até o fim das fases críticas e queda linear até a colheita. Na área colhida ou não semeada usa-se 0,30 (solo com palhada). Cada semana de semeadura é tratada como um grupo com sua própria idade, e o Kc do município é a média ponderada pela área semeada em cada semana.</p>
 <p><b>Balanço hídrico da zona radicular (FAO-56, capítulo 8).</b> O cálculo é diário, de 45 dias antes de hoje até 15 dias de previsão. A água total disponível (TAW) é estimada pela textura predominante para 60 cm de raízes (arenosa ~40 mm, média ~65 mm, argilosa ~90 mm). A água facilmente disponível é RAW = p·TAW, com p de cada cultura (tabela 22; soja 0,50, milho 0,55, feijão 0,45, algodão 0,65 etc.), ajustado pela demanda do dia (p + 0,04·(5 − ETc)). Quando a depleção ultrapassa a RAW, a evapotranspiração real é reduzida pelo coeficiente de estresse Ks = (TAW − Dr)/((1 − p)·TAW). A chuva entra integralmente, e o excedente acima da capacidade é perdido por drenagem. A depleção inicial é assumida em 50% da TAW, e os primeiros 15 dias servem de ajuste. Ks &lt; 1 indica restrição hídrica.</p>
 <p><b>Camada “Água no solo” e gráfico do município.</b> Para a cultura escolhida, cada município é classificado pelo balanço acima, com a demanda própria da cultura (ETc = ET0 × Kc da fase em que a área semeada está) e o seu limite de estresse (p). Modos: <i>Hoje</i> e <i>Pior dia (15 dias)</i> usam o Ks: atendida (Ks = 1), restrição leve (0,7 a 0,99), moderada (0,4 a 0,7) e severa (abaixo de 0,4). <i>Demanda atendida</i> é o consumo estimado (ETa) dividido pelo consumo potencial (ETc) nos dias com lavoura em campo: atendida (95% ou mais), leve (80 a 95%), moderada (60 a 80%) e severa (abaixo de 60%). Municípios sem área semeada ou já colhida no período aparecem em cinza. Os limites das classes são convenções do painel para leitura rápida, não limiares de perda de produtividade. O gráfico da ficha mostra a água no solo dia a dia (45 dias passados e 15 de previsão, em tracejado), a linha de início do estresse (1 − p), a chuva diária e uma fita com a classe de Ks de cada dia. Quando há mais de uma cultura em campo no município, a ficha compara Kc, demanda, água e Ks entre elas.</p>
+<p><b>Cana-de-açúcar.</b> A cana não tem acompanhamento fenológico na planilha. Ela aparece na seleção de cultura como “sem fenologia”: a área por município vem do mapeamento da Aprosoja-MS, e o balanço hídrico usa Kc médio anual de 1,0, que é um valor aproximado para canaviais com idades misturadas, entre os valores da FAO-56 (0,40 no início, 1,25 no pico e 0,75 no fim). Usa também p = 0,65 (tabela 22) e raízes até 120 cm (a FAO-56 indica 1,2 a 2,0 m), o que dobra a água disponível em relação às culturas anuais. Kc e profundidade são convenções do painel e devem ser revistos com a equipe.</p>
+<p><b>Filtro por cultura.</b> A cultura escolhida em “Safra e cultura” filtra a ficha, a análise, a camada de água no solo, as fotos no mapa (opção “só a cultura selecionada”, ligada por padrão) e os relatos (só os que citam a cultura; os demais são contados à parte).</p>
 <h3>8. Fotos de campo</h3>
 <p>A cultura de cada foto é identificada pela subpasta (por exemplo “04_Fotos_Campo/Soja”). A posição é lida do GPS gravado na foto (EXIF). Quando a foto não tem GPS, como as enviadas pelo WhatsApp, o painel lê por reconhecimento de texto (OCR) o carimbo de data e coordenadas impresso na imagem pelo aplicativo de câmera. São tentados textos vermelhos, amarelos e brancos (no branco, exige-se contorno escuro), no rodapé e no topo da foto, com uma segunda leitura restrita a dígitos. Leituras com o separador decimal perdido são reparadas apenas quando o resultado cai dentro da faixa geográfica de MS (17°–24,3° S; 50,7°–58,4° O). Entre as datas lidas, vale a mais frequente. O município é obtido pela sobreposição do ponto com a malha municipal.</p>
 <h3>8a. Solos ocupados por cada cultura</h3>
@@ -1194,7 +1370,7 @@ const METODOLOGIA = `
 <p>O resumo usa o período e as culturas escolhidos. Para cada cultura, apresenta a evolução da semeadura no estado e por região imediata, a distribuição por estádio, o clima do período nas áreas da cultura (ponderado pela área) e as informações de campo do período. O clima vem do histórico permanente; dias futuros vêm da previsão e são identificados como tal.</p>
 <h3>12. Limitações</h3>
 <ul><li>A projeção fenológica usa calendário médio, sem considerar temperatura (graus-dia), cultivar ou grupo de maturação.</li>
-<li>Os dados de clima por município são estimativas em um ponto e não captam a variabilidade da chuva dentro do município.</li>
+<li>Os dados de clima por município são estimativas em um ponto e não captam a variabilidade da chuva dentro do município. A média de modelos suaviza chuvas intensas e localizadas.</li>
 <li>O mapa de solos é de escala muito pequena (1:5.000.000) e não representa o solo das lavouras.</li>
 <li>Correlação entre indicadores não implica causa; as indicações do painel devem ser confirmadas em campo e com as fontes do levantamento.</li></ul>`;
 
@@ -1388,5 +1564,5 @@ $('busca').onchange = e => { const f = dadosMun?.features.find(x => norm(x.prope
   L.geoJSON(mun, {pane: 'clique', style: {stroke: false, fill: true, fillOpacity: 0}, onEachFeature: (f, l) => {
     l.on('click', () => selecionar(f)); l.bindTooltip(() => dicaMun(f), {sticky: true, direction: 'top', opacity: .9}); }}).addTo(mapa);
   mapa.fitBounds(L.geoJSON(mun).getBounds(), {padding: [10, 10]});
-  garantirClima(); pegar('dados/clima/estacoes_inmet.json').then(e => { EST = e; }); pegar('dados/clima/validacao_et0.json').then(v => { VAL = v; for (const k in _fat) delete _fat[k]; atualizarAgua(); }); pegar('dados/solo_cultura.json').then(v => { SOLO_CULT = v; Object.keys(CAM).filter(k => k.startsWith('u_')).forEach(atualizarSub); atualizarAgua(); });
+  garantirClima(); pegar('dados/clima/estacoes_inmet.json').then(e => { EST = e; }); pegar('dados/clima/validacao_et0.json').then(v => { VAL = v; for (const k in _fat) delete _fat[k]; atualizarAgua(); }); pegar('dados/solo_cultura.json').then(v => { SOLO_CULT = v; Object.keys(CAM).filter(k => k.startsWith('u_')).forEach(atualizarSub); montarCana(); montarControlesCult(); });
 })();

@@ -34,6 +34,7 @@ h1{font-size:16px;margin:0;font-weight:600;letter-spacing:-.01em;line-height:1.2
 .campo{width:100%;padding:7px 8px;border:1px solid var(--linha);border-radius:7px;background:var(--bg)}
 .linha2{display:flex;gap:6px}.linha2 .campo:first-child{flex:0 0 96px}
 .sem{display:flex;align-items:center;gap:8px;margin:8px 0 2px}.sem input{flex:1;accent-color:var(--acento)}
+.sem[hidden]{display:none}
 .sem span{font:500 12px "IBM Plex Mono",monospace;white-space:nowrap}
 .seg{display:flex;border:1px solid var(--linha);border-radius:7px;overflow:hidden}
 .seg button{flex:1;border:0;background:transparent;color:var(--suave);padding:5px 4px;font-size:12px;cursor:pointer;line-height:1.25}
@@ -93,16 +94,16 @@ details.grupo>summary .cont{margin-left:auto;font-weight:400;color:var(--suave);
 .f-corpo{overflow-y:auto;padding:12px 14px 18px;font-size:13px}
 .f-corpo h3{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--suave);margin:14px 0 6px;font-weight:600}
 .f-corpo h3:first-child{margin-top:0}
-.f-corpo table{width:100%;border-collapse:collapse}
-.f-corpo td{padding:3px 0;border-bottom:1px solid var(--linha2);vertical-align:top}
-.f-corpo td:last-child{text-align:right;font-family:"IBM Plex Mono",monospace;font-size:12px;white-space:nowrap;padding-left:8px}
-.f-corpo td i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px}
+.f-corpo table,.jc table{width:100%;border-collapse:collapse}
+.f-corpo td,.jc td{padding:3px 0;border-bottom:1px solid var(--linha2);vertical-align:top}
+.f-corpo td:last-child,.jc td:last-child{text-align:right;font-family:"IBM Plex Mono",monospace;font-size:12px;white-space:nowrap;padding-left:8px}
+.f-corpo td i,.jc td i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px}
 .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:4px}
 .kpi{background:var(--bg);border-radius:8px;padding:7px 8px}
 .kpi b{display:block;font-size:17px;font-weight:600}.kpi span{font-size:11px;color:var(--suave)}
 .graf text{fill:var(--suave)}
 .tab-ag th{font-size:10.5px;font-weight:500;color:var(--suave);text-align:right;padding:2px 3px;line-height:1.2}.tab-ag th:first-child{text-align:left}
-.tab-ag td{text-align:right;padding:3px;font-size:12px}.tab-ag td:first-child{text-align:left}
+.f-corpo .tab-ag td,.jc .tab-ag td,.tab-ag td{text-align:right;padding:3px;font-size:12px}.tab-ag td:first-child{text-align:left}
 .analise p{margin:0 0 10px}.analise h4{margin:14px 0 4px;font-size:13px}
 .analise ul{margin:4px 0 10px;padding-left:18px}.analise li{margin-bottom:4px}
 .aviso{background:var(--bg);border-left:3px solid var(--acento2);padding:8px 10px;border-radius:6px;font-size:12px;color:var(--suave);margin:10px 0}
@@ -138,3 +139,15 @@ details.grupo>summary .cont{margin-left:auto;font-weight:400;color:var(--suave);
   #menu{display:grid}
   .ficha{top:auto;left:8px;right:8px;bottom:8px;width:auto;max-height:60vh}
 }
+/* janela de clima */
+.caixa.larga{max-width:1060px}
+.janela-clima{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:14px}
+.jc{border:1px solid var(--linha);border-radius:10px;padding:10px 14px 12px;min-width:0}
+.jc.larga{grid-column:1/-1}
+.jc h3{margin:2px 0 8px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--suave);font-weight:600}
+.jc h4{margin:12px 0 4px;font-size:13px}
+.jc p{font-size:13px;line-height:1.5;margin:8px 0}
+.jc .graf{margin:6px 0 2px}
+.conc{display:inline-block;color:#fff;font-size:11px;font-weight:600;padding:1px 7px;border-radius:9px;vertical-align:1px}
+#m-corpo details summary{padding:4px 0}
+.jc a{color:var(--azul)}

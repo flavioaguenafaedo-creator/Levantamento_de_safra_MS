@@ -3,8 +3,9 @@ Busca dados meteorológicos e grava em docs/dados/clima/ para o painel.
 Roda todo dia pelo GitHub Actions (e também pode rodar no computador).
 
 1. Previsão (16 dias) e estimativa recente (92 dias) por município
-   Fonte: Open-Meteo (https://open-meteo.com) — combina modelos globais e regionais
-   (ECMWF, GFS, ICON etc.). Ponto = centróide do município. Uso não comercial gratuito.
+   Fonte: Open-Meteo (https://open-meteo.com). Ponto = centróide do município. Uso não comercial gratuito.
+   Dias passados: modelo de maior resolução para o local (best match, um modelo; não é média).
+   Próximos 16 dias: média de 6 modelos globais (ECMWF, GFS, ICON, GEM, JMA, UKMO), com a faixa entre eles.
    Atenção: os dias passados são ESTIMATIVA DE MODELO, não observação.
 
 2. Observações das estações automáticas do INMET em MS
@@ -25,10 +26,32 @@ AGORA = datetime.now(timezone(timedelta(hours=-4)))
 UA = {"User-Agent": "Painel-Levantamento-Safra-MS (CONAB SUREG-MS)"}
 
 
-def baixar(url, timeout=120):
-    req = urllib.request.Request(url, headers=UA)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+def baixar(url, timeout=120, tentativas=4):
+    """Baixa com novas tentativas. Limite gratuito do Open-Meteo: 600 chamadas/min, 5.000/h, 10.000/dia
+    (pedidos longos ou com muitos pontos contam como várias chamadas): em caso de 429, espera e tenta de novo."""
+    import time, urllib.error
+    for t in range(tentativas):
+        try:
+            req = urllib.request.Request(url, headers=UA)
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code not in (429, 500, 502, 503, 504) or t == tentativas - 1:
+                raise
+            espera = 65 if e.code == 429 else 15 * (t + 1)
+            print(f"  HTTP {e.code}: nova tentativa em {espera} s", file=sys.stderr); time.sleep(espera)
+        except (urllib.error.URLError, TimeoutError):
+            if t == tentativas - 1:
+                raise
+            time.sleep(15 * (t + 1))
+
+
+def pausa(n_pts, dias, n_vars=6):
+    """Espaça os pedidos pelo 'peso' estimado (Open-Meteo: >14 dias ou >10 variáveis contam como várias chamadas)."""
+    import time
+    peso = n_pts * max(1.0, dias / 14) * max(1.0, n_vars / 10)
+    if peso > 60:
+        time.sleep(min(90, 60 * peso / 450))
 
 
 def salvar(nome, obj):
@@ -62,14 +85,26 @@ def centroides():
     return pts
 
 
+# Modelos globais usados na média da previsão (todos disponíveis para a América do Sul no Open-Meteo).
+# Horizonte de cada um: ECMWF 15 dias, GFS 16, ICON 7,5, GEM 10, JMA 11, UKMO 7. A média de cada dia usa os modelos
+# que cobrem aquele dia; a faixa (mínimo–máximo) entre eles indica a concordância da previsão.
+MODELOS = {"ecmwf": ("ecmwf_ifs025", "ECMWF IFS (Europa)"), "gfs": ("ncep_gfs_seamless", "NOAA GFS (EUA)"),
+           "icon": ("dwd_icon_seamless", "DWD ICON (Alemanha)"), "gem": ("cmc_gem_seamless", "CMC GEM (Canadá)"),
+           "jma": ("jma_seamless", "JMA GSM (Japão)"), "ukmo": ("ukmo_seamless", "UK Met Office (Reino Unido)")}
+VARS_MM = ("p", "tx", "tn", "v", "et0")
+
+
 def open_meteo():
     pts = centroides()
-    out = {"fonte": "Open-Meteo (modelos ECMWF, GFS, ICON e outros, melhor combinação para o local)",
+    out = {"fonte": "Open-Meteo. Dias passados: modelo de maior resolução disponível para o local (opção best match). "
+                    "Próximos 16 dias: média dos modelos globais " + ", ".join(v[1] for v in MODELOS.values()) + ".",
            "nota": "Dias até ontem = estimativa de modelo, não observação de estação.",
            "gerado": AGORA.isoformat(timespec="minutes"), "unidades": {"p": "mm", "pp": "%", "tx": "°C", "tn": "°C", "v": "km/h", "et0": "mm"},
            "datas": None, "hoje": AGORA.date().isoformat(), "mun": {}}
     for i in range(0, len(pts), 40):                        # lotes de 40 pontos por requisição
         lote = pts[i:i + 40]
+        if i:
+            pausa(len(lote), 108)
         url = ("https://api.open-meteo.com/v1/forecast?"
                f"latitude={','.join(str(p[1]) for p in lote)}&longitude={','.join(str(p[2]) for p in lote)}"
                f"&daily={','.join(VARS.values())}&past_days=92&forecast_days=16&timezone=America%2FCampo_Grande")
@@ -80,6 +115,10 @@ def open_meteo():
             d = r["daily"]
             out["datas"] = out["datas"] or d["time"]
             out["mun"][cd] = {k: [r1(v) for v in d.get(nome, [])] for k, nome in VARS.items()}
+    try:
+        multimodelo(pts, out)
+    except Exception as e:                                  # sem a média, fica a previsão do best match
+        print(f"multimodelo: falhou ({e}); mantida a previsão do modelo único", file=sys.stderr)
     salvar("modelo_municipios.json", out)
     # dias já passados entram no histórico permanente (nunca é apagado)
     hoje = AGORA.date().isoformat()
@@ -93,6 +132,58 @@ def open_meteo():
         completar_era5(pts)
     except Exception as e:
         print(f"ERA5 (reanálise): falhou ({e})", file=sys.stderr)
+
+
+def multimodelo(pts, out):
+    """Previsão de 16 dias de cada modelo (um pedido por modelo) e média por dia/município.
+    Grava em out['mun'][cd]: p, tx, tn, v, et0 = média dos modelos a partir de hoje; p_min, p_max, n_mod e
+    'mod' = chuva diária de cada modelo (para a faixa e a concordância). Dias passados não mudam."""
+    datas = out["datas"]; idx = {d: i for i, d in enumerate(datas)}; hoje = out["hoje"]
+    bruto = {}                                              # bruto[cd][modelo][var] = {data: valor}
+    usados = []
+    for chave, (mid, _) in MODELOS.items():
+        ok = 0
+        for i in range(0, len(pts), 40):
+            lote = pts[i:i + 40]
+            pausa(len(lote), 16)
+            url = ("https://api.open-meteo.com/v1/forecast?"
+                   f"latitude={','.join(str(p[1]) for p in lote)}&longitude={','.join(str(p[2]) for p in lote)}"
+                   f"&daily={','.join(VARS[k] for k in VARS_MM)}&models={mid}&forecast_days=16&timezone=America%2FCampo_Grande")
+            try:
+                resp = json.loads(baixar(url))
+            except Exception as e:
+                print(f"multimodelo {chave}: falhou ({e})", file=sys.stderr); continue
+            resp = [resp] if isinstance(resp, dict) else resp
+            for (cd, _, _), r in zip(lote, resp):
+                d = r.get("daily", {})
+                for k in VARS_MM:
+                    nome = VARS[k]
+                    serie = d.get(nome) or d.get(f"{nome}_{mid}")   # com um só modelo a resposta vem sem sufixo
+                    if serie:
+                        bruto.setdefault(cd, {}).setdefault(chave, {})[k] = dict(zip(d["time"], serie)); ok += 1
+        if ok:
+            usados.append(chave)
+    if not usados:
+        raise RuntimeError("nenhum modelo respondeu")
+    n = len(datas)
+    for cd, m in out["mun"].items():
+        b = bruto.get(cd, {})
+        m["mod"] = {ch: [None] * n for ch in usados}
+        m["p_min"], m["p_max"], m["n_mod"] = [None] * n, [None] * n, [0] * n
+        for d, i in idx.items():
+            if d < hoje:
+                continue
+            for k in VARS_MM:
+                vals = [b[ch][k].get(d) for ch in usados if k in b.get(ch, {})]
+                vals = [v for v in vals if v is not None]
+                if vals:
+                    m[k][i] = r1(sum(vals) / len(vals))
+                if k == "p" and vals:
+                    m["p_min"][i], m["p_max"][i], m["n_mod"][i] = r1(min(vals)), r1(max(vals)), len(vals)
+            for ch in usados:
+                m["mod"][ch][i] = r1(b.get(ch, {}).get("p", {}).get(d))
+    out["modelos"] = {ch: MODELOS[ch][1] for ch in usados}
+    print(f"multimodelo: média de {len(usados)} modelos ({', '.join(usados)})")
 
 
 # ------------------------------------------------------------- histórico permanente por ano
@@ -152,8 +243,10 @@ def completar_era5(pts, max_dias=400):
     a, b = faltam[0], min(faltam[-1], faltam[0] + timedelta(days=max_dias))
     dias = {}
     nomes = {k: VARS[k] for k in HIST_VARS}
-    for i in range(0, len(pts), 40):
-        lote = pts[i:i + 40]
+    for i in range(0, len(pts), 10):
+        lote = pts[i:i + 10]
+        if i:
+            pausa(len(lote), (b - a).days + 1, len(nomes))
         url = ("https://archive-api.open-meteo.com/v1/archive?"
                f"latitude={','.join(str(p[1]) for p in lote)}&longitude={','.join(str(p[2]) for p in lote)}"
                f"&start_date={a}&end_date={b}&daily={','.join(nomes.values())}&timezone=America%2FCampo_Grande")
@@ -327,6 +420,27 @@ def _stats(pares):
             "fator": round(min(1.3, max(0.7, ma / mb)), 3) if mb and n >= 30 else None}
 
 
+def _stats_chuva(pares):
+    """Chuva diária estação × modelo no ponto da estação. Só descreve (não corrige): total, viés, correlação
+    diária e de somas de 7 dias, e acerto de dia com/sem chuva (limiar 1 mm)."""
+    n = len(pares)
+    if n < 20:
+        return None
+    ti, tm = sum(a for a, _ in pares), sum(b for _, b in pares)
+    def corr(xs):
+        k = len(xs)
+        if k < 3: return None
+        ma, mb = sum(a for a, _ in xs) / k, sum(b for _, b in xs) / k
+        sa = math.sqrt(sum((a - ma) ** 2 for a, _ in xs)); sb = math.sqrt(sum((b - mb) ** 2 for _, b in xs))
+        return round(sum((a - ma) * (b - mb) for a, b in xs) / (sa * sb), 2) if sa and sb else None
+    sem = [(sum(a for a, _ in pares[i:i + 7]), sum(b for _, b in pares[i:i + 7])) for i in range(0, n - 6, 7)]
+    acerto = sum((a >= 1) == (b >= 1) for a, b in pares) / n
+    chuvosos = [(a, b) for a, b in pares if a >= 1]
+    pod = sum(b >= 1 for _, b in chuvosos) / len(chuvosos) if chuvosos else None
+    return {"n": n, "total_inmet": round(ti), "total_modelo": round(tm), "vies_pct": round(100 * (tm - ti) / ti, 1) if ti else None,
+            "r_diario": corr(pares), "r_7dias": corr(sem), "acerto_dias": round(100 * acerto), "deteccao": round(100 * pod) if pod is not None else None}
+
+
 def validar_et0(est):
     """Compara a ET0 Penman-Monteith das estações com a ET0 do modelo no mesmo ponto:
     (a) reanálise ERA5 (base do histórico) e (b) modelo de previsão (base do balanço hídrico recente)."""
@@ -336,27 +450,31 @@ def validar_et0(est):
     dias_et0 = sorted({d for cod, _, _ in pts for d, v in est[cod]["serie"].items() if "et0" in v})
     fim = min(dias_et0[-1], (AGORA - timedelta(days=6)).date().isoformat())
     ini = max(dias_et0[0], (AGORA - timedelta(days=365)).date().isoformat())
-    modelo = {"era5": {}, "previsao": {}}
-    for i in range(0, len(pts), 40):
-        lote = pts[i:i + 40]
+    modelo = {"era5": {}, "previsao": {}}; chuva = {"era5": {}, "previsao": {}}
+    for i in range(0, len(pts), 20):
+        lote = pts[i:i + 20]
         lat = ",".join(str(p[1]) for p in lote); lon = ",".join(str(p[2]) for p in lote)
-        for tipo, url in (("era5", f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={ini}&end_date={fim}&daily=et0_fao_evapotranspiration&timezone=America%2FCampo_Grande"),
-                          ("previsao", f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=et0_fao_evapotranspiration&past_days=92&forecast_days=1&timezone=America%2FCampo_Grande")):
+        for tipo, url in (("era5", f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={ini}&end_date={fim}&daily=et0_fao_evapotranspiration,precipitation_sum&timezone=America%2FCampo_Grande"),
+                          ("previsao", f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=et0_fao_evapotranspiration,precipitation_sum&past_days=92&forecast_days=1&timezone=America%2FCampo_Grande")):
             try:
                 resp = json.loads(baixar(url, 300))
             except Exception as e:
                 print(f"validação ET0 ({tipo}): falhou ({e})", file=sys.stderr); continue
+            pausa(len(lote), 365 if tipo == "era5" else 93, 2)
             resp = [resp] if isinstance(resp, dict) else resp
             for (cod, _, _), r in zip(lote, resp):
                 modelo[tipo][cod] = dict(zip(r["daily"]["time"], r["daily"]["et0_fao_evapotranspiration"]))
+                chuva[tipo][cod] = dict(zip(r["daily"]["time"], r["daily"].get("precipitation_sum", [])))
     saida = []
     for cod, la, lo in pts:
         e = est[cod]; reg = {"codigo": cod, "nome": e["nome"], "lat": la, "lon": lo}
         for tipo in ("era5", "previsao"):
             m = modelo[tipo].get(cod, {})
             reg[tipo] = _stats([(v["et0"], m[d]) for d, v in e["serie"].items() if "et0" in v and m.get(d) is not None])
+            c = chuva[tipo].get(cod, {})
+            reg["chuva_" + tipo] = _stats_chuva([(v["p"], c[d]) for d, v in sorted(e["serie"].items()) if v.get("p") is not None and c.get(d) is not None and d <= fim])
         saida.append(reg)
-    salvar("validacao_et0.json", {"descricao": "ET0 FAO-56 Penman-Monteith calculada com dados horários das estações INMET (MS) comparada com a ET0 do modelo no ponto da estação. fator = média INMET / média modelo (aplicado só com n >= 30 dias; limitado a 0,7–1,3).",
+    salvar("validacao_et0.json", {"descricao": "ET0 FAO-56 Penman-Monteith calculada com dados horários das estações INMET (MS) comparada com a ET0 do modelo no ponto da estação. fator = média INMET / média modelo (aplicado só com n >= 30 dias; limitado a 0,7–1,3). chuva_*: chuva diária da estação x modelo (só descritivo, sem correção).",
                                   "gerado": AGORA.isoformat(timespec="minutes"), "periodo": [ini, fim], "estacoes": saida})
 
 
