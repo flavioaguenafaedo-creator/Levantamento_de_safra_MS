@@ -1,0 +1,2 @@
+# Mapas de uso substituídos: um nome por linha (sem extensão). A rotina ignora esses arquivos.
+Soja_2025-26

@@ -194,8 +194,15 @@ CLASSES_USO = {}          # camada -> classes (o painel acha o mapa de cada cult
 # mapas grandes podem vir divididos em partes (ex.: Pastagem_2025-26_parte1.shp, ..._parte2.shp): viram uma camada só
 import re
 GRUPOS_USO = {}
+# mapas substituídos: nomes (sem extensão e sem _parteN) listados em dados/entrada/uso_solo/desativados.txt são ignorados
+_desat = ENT / "uso_solo" / "desativados.txt"
+DESATIVADOS = {"soja_2025-26"}   # soja da Aprosoja-MS substituída pelo mapeamento Conab/Inpe 2024/25
+DESATIVADOS |= {l.strip().lower() for l in _desat.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")} if _desat.exists() else set()
 for f in shps("uso_solo"):
-    GRUPOS_USO.setdefault(re.sub(r"_parte\d+$", "", f.stem, flags=re.I), []).append(f)
+    base = re.sub(r"_parte\d+$", "", f.stem, flags=re.I)
+    if base.lower() in DESATIVADOS:
+        log.append(f"{f.name}: desativado (desativados.txt)"); continue
+    GRUPOS_USO.setdefault(base, []).append(f)
 for stem, arquivos in sorted(GRUPOS_USO.items()):
     f = arquivos[0].with_name(stem + ".shp")
     g = pd.concat([ler(a) for a in arquivos], ignore_index=True) if len(arquivos) > 1 else ler(arquivos[0])
@@ -226,6 +233,10 @@ for stem, arquivos in sorted(GRUPOS_USO.items()):
     # pastagem, vegetação etc. são só referência visual: geometria mais leve (~250 m, coordenadas com 4 casas)
     salvar(g, f"uso_{f.stem.lower()}", TOL_USO) if agricola else salvar(g, f"uso_{f.stem.lower()}", TOL_USO * 2.5, decimais=4)
     CLASSES_USO[f"uso_{f.stem.lower()}"] = sorted(g["classe"].unique().tolist())
+# camadas de uso que não vieram de nenhum mapa ativo (ex.: mapa substituído) saem do painel
+for velho in SAI.glob("uso_*.geojson"):
+    if velho.stem not in CLASSES_USO:
+        velho.unlink(); log.append(f"{velho.name}: removido (mapa de entrada desativado ou apagado)")
 
 
 # ------------------------------------------------- solos ocupados por cada cultura (uso x solos x municípios)
