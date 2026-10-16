@@ -1,5 +1,5 @@
 {
-  "atualizado_em": "2026-10-15T16:20:08+00:00",
+  "atualizado_em": "2026-10-16T11:50:00+00:00",
   "camadas": [
     "infra_rodovias_estaduais",
     "infra_rodovias_federais",
@@ -7,6 +7,7 @@
     "municipios",
     "solos",
     "uso_algodao_2a_safra_2025",
+    "uso_arroz_irrigado_2023-24",
     "uso_cana_2025-26",
     "uso_eucalipto_2025-26",
     "uso_milho_1a_safra_2025-26",
@@ -15,13 +16,16 @@
     "uso_pastagem_2025-26",
     "uso_pinus_2025-26",
     "uso_seringueira_2025-26",
-    "uso_soja_2025-26",
+    "uso_soja_2024-25",
     "uso_sorgo_2a_safra_2025",
     "uso_vegetacao_remanescente_2025-26"
   ],
   "classes": {
     "uso_algodao_2a_safra_2025": [
       "Algodão"
+    ],
+    "uso_arroz_irrigado_2023-24": [
+      "Arroz irrigado"
     ],
     "uso_cana_2025-26": [
       "Cana-de-açúcar"
@@ -47,7 +51,7 @@
     "uso_seringueira_2025-26": [
       "Seringueira"
     ],
-    "uso_soja_2025-26": [
+    "uso_soja_2024-25": [
       "Soja"
     ],
     "uso_sorgo_2a_safra_2025": [
@@ -57,14 +61,16 @@
       "Vegetação remanescente"
     ]
   },
-  "assinatura_entrada": "45c86618df614896015846c411ca1c4c",
+  "assinatura_entrada": "7dceb563ffe33c408a7b8e07d6bbcc93",
   "log": [
     "municipios: 79 feições, 790 KB",
     "limite_ms: gerado a partir dos municípios",
     "limite_ms: 1 feições, 75 KB",
     "solos: 180 feições, 383 KB",
     "solos: fonte Solos_5000.shp",
+    "Soja_2025-26.shp: desativado (desativados.txt)",
     "uso_algodao_2a_safra_2025: 9 feições, 11 KB",
+    "uso_arroz_irrigado_2023-24: 9 feições, 42 KB",
     "uso_cana_2025-26: 47 feições, 924 KB",
     "uso_eucalipto_2025-26: 75 feições, 899 KB",
     "uso_milho_1a_safra_2025-26: 31 feições, 20 KB",
@@ -74,11 +80,14 @@
     "uso_pastagem_2025-26: 79 feições, 14,330 KB",
     "uso_pinus_2025-26: 6 feições, 3 KB",
     "uso_seringueira_2025-26: 29 feições, 38 KB",
-    "uso_soja_2025-26: 78 feições, 5,534 KB",
+    "Soja_2024-25: 5 partes reunidas",
+    "uso_soja_2024-25: 78 feições, 8,643 KB",
     "uso_sorgo_2a_safra_2025: 75 feições, 769 KB",
     "Vegetacao_remanescente_2025-26: 4 partes reunidas",
     "uso_vegetacao_remanescente_2025-26: 79 feições, 15,860 KB",
+    "uso_soja_2025-26.geojson: removido (mapa de entrada desativado ou apagado)",
     "solo_cultura: Algodão (Algodao_2a_safra_2025.shp) 29,746 ha cruzados com solos",
+    "solo_cultura: Arroz irrigado (Arroz_irrigado_2023-24.shp) 9,589 ha cruzados com solos",
     "solo_cultura: Cana-de-açúcar (Cana_2025-26.shp) 991,416 ha cruzados com solos",
     "solo_cultura: Eucalipto (Eucalipto_2025-26.shp) 1,967,284 ha cruzados com solos",
     "solo_cultura: Milho 1ª safra (Milho_1a_safra_2025-26.shp) 5,475 ha cruzados com solos",
@@ -87,7 +96,7 @@
     "solo_cultura: Pastagem (Pastagem_2025-26.shp) 16,325,989 ha cruzados com solos",
     "solo_cultura: Pinus (Pinus_2025-26.shp) 5,812 ha cruzados com solos",
     "solo_cultura: Seringueira (Seringueira_2025-26.shp) 25,119 ha cruzados com solos",
-    "solo_cultura: Soja (Soja_2025-26.shp) 4,591,229 ha cruzados com solos",
+    "solo_cultura: Soja (Soja_2024-25.shp) 4,192,482 ha cruzados com solos",
     "solo_cultura: Sorgo (Sorgo_2a_safra_2025.shp) 395,277 ha cruzados com solos",
     "solo_cultura: Vegetação remanescente (Vegetacao_remanescente_2025-26.shp) 10,419,110 ha cruzados com solos",
     "Rodovias_Estaduais.shp: texto relido em UTF-8 (codificação declarada incorreta)",

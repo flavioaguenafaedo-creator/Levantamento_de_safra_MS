@@ -223,7 +223,7 @@ function soloDoMunicipio(f) {
 
 // ------------------------------------------------------------------ uso e cobertura (camadas publicadas pela rotina)
 const CORES_USO = {"Soja": "#e0a526", "Cana-de-açúcar": "#3f9a5a", "Milho": "#d4694a", "Pastagem": "#c9d99a", "Remanescente/vegetação": "#2f5d3a", "Eucalipto": "#6d8fbf", "Pinus": "#a37fbf", "Seringueira": "#8a6f4e", "Outros usos": "#bdbdbd", "Milho 2ª safra": "#c98b14", "Sorgo": "#a83a2a", "Algodão": "#7d8fa3", "Milheto": "#b9a183",
-  "Milho 1ª safra": "#e0a526", "Vegetação remanescente": "#2f5d3a"};
+  "Milho 1ª safra": "#e0a526", "Vegetação remanescente": "#2f5d3a", "Arroz irrigado": "#4f86b8"};
 const PALETA = ["#e3b23c", "#4f8a3c", "#9ccf7f", "#d4694a", "#6d8fbf", "#a37fbf", "#c4c4a0", "#3f6f6a"];
 // nome legível da camada de uso: classes do manifesto + safra tirada do nome do arquivo
 // ex.: uso_soja_2025-26 -> "Soja 2025/26"; uso_milho_2a_safra_2025 -> "Milho 2ª safra 2025"; uso_sorgo_2a_safra_2025 -> "Sorgo 2ª safra 2025"
@@ -250,7 +250,9 @@ function camUso(nome, grupo = 'uso') {
       return L.geoJSON(d, {style: CAM[id].estilo, interactive: false}); },
     sub: () => `<div class="leg">${CAM[id].legenda || ''}</div>${solosNaCamada(classes)}<div class="nota">Fonte: ${esc(fonteUso(nome))}.</div>`});
 }
-function fonteUso(nome) { return /soja|cana|milho|sorgo|algod|pastagem|vegetacao|remanescente|eucalipto|outros_usos|seringueira|pinus|ms2\d/i.test(nome) ? `mapeamento de uso e cobertura da Aprosoja-MS${/2a_safra/i.test(nome) ? ' (2ª safra)' : ''}` : 'mapeamento de uso e cobertura enviado à SEGEO-MS'; }
+function fonteUso(nome) { if (/arroz/i.test(nome)) return 'mapeamento de arroz irrigado da Conab (SEGEO-MS), safra 2023/24, por interpretação de imagens Sentinel-2 e levantamentos de campo';
+  if (/soja_2024/i.test(nome)) return 'mapeamento de soja da Conab e do Inpe, safra 2024/25 (Sentinel-2, classificação híbrida, escala 1:100.000)';
+  return /soja|cana|milho|sorgo|algod|pastagem|vegetacao|remanescente|eucalipto|outros_usos|seringueira|pinus|ms2\d/i.test(nome) ? `mapeamento de uso e cobertura da Aprosoja-MS${/2a_safra/i.test(nome) ? ' (2ª safra)' : ''}` : 'mapeamento de uso e cobertura enviado à SEGEO-MS'; }
 // geometrias de uso já baixadas (uma feição por classe e município) e busca do mapa de uma cultura
 const USO_GEO = {};
 function arquivoUso(cid) {   // nome da camada uso_* que tem a cultura (o mais recente pelo nome)
@@ -1367,7 +1369,9 @@ const METODOLOGIA = `
 <table><tr><th>Informação</th><th>Fonte</th><th>Atualização</th></tr>
 <tr><td>Limites municipais</td><td>IBGE, malha municipal 2025 (SIRGAS 2000)</td><td>Fixa</td></tr>
 <tr><td>Solos (classe e textura)</td><td>Mapa de Solos do Brasil, IBGE/Embrapa, escala 1:5.000.000</td><td>Fixa</td></tr>
-<tr><td>Uso e cobertura (soja, cana, milho 2ª safra, sorgo, algodão)</td><td>Mapeamentos vetoriais de uso e cobertura da Aprosoja-MS: 1ª safra 2025/26 (arquivo MS26S1UCS: soja e cana-de-açúcar) e 2ª safra 2025 (arquivo MS25S2: milho 2ª safra, sorgo e algodão). Do mapa de 2ª safra foram extraídas só as culturas anuais acompanhadas pela Conab (milheto e demais usos ficaram de fora). Do mapa de 1ª safra também foram extraídos, só como referência visual, milho 1ª safra, pastagem, vegetação remanescente, eucalipto, pinus, seringueira e outros usos; pastagem e vegetação remanescente foram simplificadas em 100 m para caber no repositório (as áreas exibidas são as do mapeamento original)</td><td>Quando novos arquivos são enviados</td></tr>
+<tr><td>Uso e cobertura (soja, cana, milho 2ª safra, sorgo, algodão)</td><td>Mapeamentos vetoriais de uso e cobertura da Aprosoja-MS: 1ª safra 2025/26 (arquivo MS26S1UCS: cana-de-açúcar e demais ocupações; a soja passou a vir do mapeamento da Conab) e 2ª safra 2025 (arquivo MS25S2: milho 2ª safra, sorgo e algodão). Do mapa de 2ª safra foram extraídas só as culturas anuais acompanhadas pela Conab (milheto e demais usos ficaram de fora). Do mapa de 1ª safra também foram extraídos, só como referência visual, milho 1ª safra, pastagem, vegetação remanescente, eucalipto, pinus, seringueira e outros usos; pastagem e vegetação remanescente foram simplificadas em 100 m para caber no repositório (as áreas exibidas são as do mapeamento original)</td><td>Quando novos arquivos são enviados</td></tr>
+<tr><td>Soja</td><td>Mapeamento de soja de MS da Conab e do Inpe, safra 2024/25: classificação híbrida (supervisionada com Random Forest no Brazil Data Cube + interpretação visual) de imagens Sentinel-2, escala 1:100.000 (4,22 milhões de ha). Substitui o mapa de soja da Aprosoja-MS</td><td>Quando novos arquivos são enviados</td></tr>
+<tr><td>Arroz irrigado</td><td>Mapeamento de arroz irrigado de MS da Conab (SEGEO-MS), safra 2023/24: interpretação visual de imagens Sentinel-2 (10 m) com apoio do SATVEG/Embrapa e de levantamentos de campo, escala 1:2.000 a 1:6.000 (9.952 ha em 9 municípios)</td><td>Quando novos arquivos são enviados</td></tr>
 <tr><td>Rodovias federais e estaduais</td><td>Base vetorial de rodovias de MS fornecida à SEGEO-MS (nome, jurisdição, revestimento, extensão)</td><td>Quando novos arquivos são enviados</td></tr>
 <tr><td>Evolução do plantio</td><td>Planilha semanal preenchida pelos técnicos da SEGEO-MS (% acumulado da área plantada por município)</td><td>Semanal, lida da pasta da equipe</td></tr>
 <tr><td>Previsão diária por município (16 dias)</td><td>Open-Meteo: média de seis modelos globais (ECMWF IFS, NOAA GFS, DWD ICON, CMC GEM, JMA e UK Met Office), no ponto central de cada município, com a faixa entre os modelos</td><td>Diária (06h)</td></tr>
