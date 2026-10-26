@@ -1761,7 +1761,7 @@ const pdfTxt = t => String(t ?? '').replace(/<[^>]+>/g, '').replace(/&lt;/g, '<'
 const MESES_EXT = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
 const dExt = d => d ? `${d.getDate() === 1 ? '1º' : d.getDate()} de ${MESES_EXT[d.getMonth()]}` : '';
 const lista = a => a.length <= 1 ? (a[0] || '') : a.slice(0, -1).join(', ') + ' e ' + a.at(-1);
-const haTxt = v => v >= 1e6 ? `${n1(v / 1e6)} ${v >= 2e6 ? 'milhões' : 'milhão'} de hectares` : v >= 1e4 ? `${n0(v / 1e3)} mil hectares` : `${n0(v)} hectares`;
+const haTxt = v => v >= 1e6 ? `${n1(v / 1e6)} ${v >= 2e6 ? 'milhões' : 'milhão'} de hectares` : v >= 1e4 ? `${n0(v / 1e3)} mil hectares` : v >= 1e3 ? `${n1(v / 1e3)} mil hectares` : `${n0(v)} hectares`;
 const nmMun = cd => MUN_IDX[cd]?.properties.NM_MUN;
 const maiusc = t => t ? t[0].toUpperCase() + t.slice(1) : t;
 const safraAnterior = s => { const m = /^(\d{4})\/(\d{2})$/.exec(s || ''); return m ? `${+m[1] - 1}/${m[1].slice(2)}` : null; };
@@ -1780,8 +1780,8 @@ function historiaTempo(serie) {
   const nome = b => `${b.ini.getDate() <= 15 ? 'primeira' : 'segunda'} quinzena de ${MESES_EXT[b.ini.getMonth()]}`;
   const tipo = b => { const r = b.p / Math.max(1, b.e); return r >= 1.5 ? 'farta' : r >= .8 ? 'regular' : r >= .4 ? 'fraca' : 'seca'; };
   const fr = []; let ant = null;
-  blocos.forEach((b, i) => { const t = tipo(b), mm = `${n0(b.p)} mm em ${b.ch} dia${b.ch === 1 ? '' : 's'} de chuva`;
-    const desc = {farta: `a chuva foi farta (${mm}), bem acima do que as plantas e o solo perdem por evaporação`, regular: `choveu de forma regular (${mm}), o suficiente para repor a água do solo`, fraca: `a chuva ficou abaixo da demanda (${mm})`, seca: `o tempo foi seco (${b.p < 1 ? 'praticamente sem chuva' : mm})`}[t];
+  blocos.forEach((b, i) => { const t = tipo(b), mm = `${n0(b.p)} mm, distribuídos em ${b.ch} dia${b.ch === 1 ? '' : 's'}`;
+    const desc = {farta: `a chuva foi farta (${mm}), bem acima do que as plantas e o solo perdem por evaporação`, regular: `choveu de forma regular (${mm}), em volume próximo ao que as lavouras consomem`, fraca: `a chuva ficou abaixo do que as lavouras consomem (${mm})`, seca: `o tempo foi seco (${b.p < 1 ? 'praticamente sem chuva' : mm})`}[t];
     if (i === 0) fr.push(`Na ${nome(b)}, ${desc}.`);
     else if (t === ant) fr.push(`O padrão se repetiu na ${nome(b)}${b.p >= 1 ? ` (${n0(b.p)} mm)` : ''}.`);
     else fr.push(`${['Já na', 'Na', 'Em seguida, na'][i % 3]} ${nome(b)}, ${desc}.`);
@@ -1804,12 +1804,15 @@ function historiaAgua(R, critDe, nomeC, cana) {
   const pas = R.filter(x => !x.prev && x.r != null), fut = R.filter(x => x.prev && x.r != null); if (!pas.length) return {txt: '', dest: null};
   const ondas = []; let o = null; for (const x of pas) { if (x.r >= 20) { if (!o) ondas.push(o = {a: x, b: x, pico: x}); o.b = x; if (x.r > o.pico.r) o.pico = x; } else o = null; }
   const fr = [], hoje = pas.at(-1), maxF = fut.length ? fut.reduce((b, x) => x.r > b.r ? x : b) : null; let dest = null;
-  if (!ondas.length) fr.push(`Ao longo de todo o período, a água não chegou a faltar para a maior parte das lavouras de ${nomeC}: em nenhum dia mais de 20% da área em campo ficou com restrição hídrica.`);
+  if (!ondas.length) fr.push(`Ao longo de todo o período, não faltou água para a maior parte das lavouras de ${nomeC}: em nenhum dia mais de 20% da área cultivada ficou com falta de água.`);
   else { ondas.slice(0, 3).forEach((w, i) => { const dur = Math.round((deISO(w.b.d) - deISO(w.a.d)) / 864e5) + 1, cr = critDe(deISO(w.pico.d));
-      fr.push(`${i === 0 ? 'A primeira restrição relevante apareceu' : 'Uma nova restrição apareceu'} em ${dExt(deISO(w.a.d))} e durou ${dur} dia${dur === 1 ? '' : 's'}; no pior momento, em ${dExt(deISO(w.pico.d))}, ${n0(w.pico.r)}% da área em campo estava com falta de água${w.pico.sev >= 5 ? ` (${n0(w.pico.sev)}% em nível moderado ou severo)` : ''}${cr >= 10 ? `, justamente quando cerca de ${n0(cr)}% da área atravessava fases críticas` : ''}.`); });
+      const desdeIni = w.a === pas[0], ateHoje = w.b === pas.at(-1);
+      fr.push(`${desdeIni ? `A falta de água já estava presente no início do período e ${ateHoje ? 'continua até hoje' : `durou ${dur} dia${dur === 1 ? '' : 's'}`}` : `${i === 0 ? 'A falta de água começou a aparecer' : 'Um novo período de falta de água começou'} em ${dExt(deISO(w.a.d))} e ${ateHoje ? 'continua até hoje' : `durou ${dur} dia${dur === 1 ? '' : 's'}`}`}. No pior momento, em ${dExt(deISO(w.pico.d))}, atingiu ${n0(w.pico.r)}% da área cultivada${w.pico.sev >= 5 ? `, sendo ${n0(w.pico.sev)}% em nível moderado ou severo` : ''}${cr >= 10 ? `, justamente quando cerca de ${n0(cr)}% da área atravessava fases críticas` : ''}.`); });
     if (ondas.length > 3) fr.push(`Houve ainda outros ${ondas.length - 3} episódios menores.`); }
-  fr.push(hoje.r >= 5 ? `Hoje, ${n0(hoje.r)}% da área em campo está com alguma restrição.` : 'Hoje, a água do solo atende praticamente toda a área em campo.');
-  if (maxF) fr.push(maxF.r >= 20 ? `Pela previsão, a situação deve piorar e chegar a ${n0(maxF.r)}% da área por volta de ${dExt(deISO(maxF.d))}.` : maxF.r > hoje.r + 5 ? `A previsão indica alguma piora, até ${n0(maxF.r)}% da área.` : 'A previsão dos próximos dias não indica falta de água relevante.');
+  fr.push(hoje.r >= 5 ? `Hoje, ${n0(hoje.r)}% da área cultivada está com alguma falta de água.` : 'Hoje, o solo tem água suficiente para praticamente toda a área cultivada.');
+  if (maxF) fr.push(maxF.r > hoje.r + 5 ? `A previsão indica piora, com até ${n0(maxF.r)}% da área com falta de água por volta de ${dExt(deISO(maxF.d))}.`
+    : maxF.r >= 20 ? `A previsão indica que o quadro deve continuar nos próximos dias, com cerca de ${n0(maxF.r)}% da área nessa situação.`
+    : hoje.r >= 20 ? 'A previsão indica melhora nos próximos dias, com a volta da chuva.' : 'A previsão dos próximos dias não indica falta de água relevante.');
   // efeito provável na safra
   const pico = ondas.reduce((b, w) => !b || w.pico.r > b.pico.r ? w : b, null), crP = pico ? critDe(deISO(pico.pico.d)) : 0, crF = maxF ? critDe(deISO(maxF.d)) : 0;
   let ef;
@@ -1819,9 +1822,9 @@ function historiaAgua(R, critDe, nomeC, cana) {
   else if (!pico && !(maxF && maxF.r >= 20)) ef = 'Do ponto de vista da água, o potencial produtivo segue preservado até aqui.';
   else if (pico && crP < 10 && !(maxF && maxF.r >= 20 && crF >= 10)) ef = 'Como a falta de água pegou as lavouras ainda no início do ciclo, quando a planta exige pouca água e se recupera bem com a volta da chuva, o efeito sobre a produtividade tende a ser pequeno; o ponto de atenção é o estande, com possíveis falhas de germinação nos solos arenosos.';
   else ef = `A falta de água coincidiu ${maxF && maxF.r >= 20 && crF >= 10 ? 'e pode voltar a coincidir ' : ''}com fases em que a planta define o número e o peso dos grãos (florescimento e enchimento). É nesse momento que a restrição mais pesa: se persistir, pode reduzir a produtividade, o que precisa ser confirmado nas vistorias.`;
-  if (pico && pico.pico.r >= 25) dest = `teve até ${n0(pico.pico.r)}% da área com falta de água (${dExt(deISO(pico.pico.d))})`;
-  if (maxF && maxF.r >= 25) dest = `pode ter ${n0(maxF.r)}% da área com falta de água por volta de ${dExt(deISO(maxF.d))}, pela previsão`;
-  return {txt: fr.join(' '), efeito: ef, dest};
+  if (pico && pico.pico.r >= 25) dest = `no pior momento do período, em ${dExt(deISO(pico.pico.d))}, ${n0(pico.pico.r)}% da área ficou com falta de água`;
+  if (maxF && maxF.r >= 25 && maxF.r > hoje.r + 5) dest = `a previsão indica até ${n0(maxF.r)}% da área com falta de água por volta de ${dExt(deISO(maxF.d))}`;
+  return {txt: fr.join(' '), efeito: ef, dest, pico: pico?.pico};
 }
 // relatos de viagem contados como texto corrido, já cruzados com os dados do painel
 function prosaRelatos(cid, filtro) {
@@ -1848,29 +1851,32 @@ function prosaRelatos(cid, filtro) {
       if (pg.length) { const it = [...new Set(pg.flatMap(f => f.itens))], nv = [...new Set(pg.map(f => f.nivel).filter(Boolean))]; pr.push(`${rp ? 'os produtores' : 'Os produtores'} relatam ${lista(it)}${nv.length ? ` em intensidade ${nv.map(x => ({moderado: 'moderada', alto: 'alta', baixo: 'baixa'})[x] || x).join(' a ')}` : ''}`); }
       p1.push(maiusc(pr.join(', e ')) + '.'); }
     if (es.length) p1.push(`As lavouras mais adiantadas já estavam em ${lista(es)}.`);
-    for (const f of um('conversao')) p1.push(`${f.escopo.length === 1 ? `Em ${nmMun(f.escopo[0])}` : 'Na região'}, parte da área de ${nomeC} está dando lugar ${/pecu/.test(f.para) ? 'à pecuária' : /euca/.test(f.para) ? 'ao eucalipto' : 'à cana'}${f.min ? `, algo entre ${n0(f.min)}${f.max && f.max !== f.min ? ` e ${n0(f.max)}` : ''} hectares` : ''}.`);
+    const milHa = v => v >= 1000 ? `${n0(v / 1000)} mil` : n0(v);
+    for (const f of um('conversao')) { const dst = /pecu/.test(f.para) ? 'à pecuária' : /euca/.test(f.para) ? 'ao eucalipto' : 'à cana', loc = f.escopo.length === 1 ? `Em ${nmMun(f.escopo[0])}` : 'Na região';
+      p1.push(f.min ? `${loc}, ${f.max && f.max !== f.min ? `entre ${milHa(f.min)} e ${milHa(f.max)}` : `cerca de ${milHa(f.min)}`} hectares de ${nomeC} estão dando lugar ${dst}.` : `${loc}, parte da área de ${nomeC} está dando lugar ${dst}.`); }
     const ant = um('area').find(f => f.anterior), atu = um('area').find(f => !f.anterior);
     if (ant && atu) p1.push(`A área deve passar de cerca de ${haTxt(ant.ha)} na safra passada para ${haTxt(atu.ha)} nesta, ${atu.ha > ant.ha ? 'um aumento' : 'uma queda'} de ${n0(Math.abs(100 * (atu.ha - ant.ha) / ant.ha))}%.`);
     const cu = um('custo').find(f => f.valor), prc = um1('preco'), pd = um1('produtividade');
-    if (cu && prc) { const kgNec = cu.valor / prc.valor * prc.kgSaca; let t = `Pelos números levantados na viagem, com custo de R$ ${n0(cu.valor)} por hectare e preço de R$ ${prc.valor.toLocaleString('pt-BR', {minimumFractionDigits: 2})} por ${prc.unid === 'kg' ? 'quilo' : `saca de ${prc.kgSaca} kg`}, o produtor precisa colher cerca de ${n0(kgNec)} kg por hectare só para pagar a lavoura`;
+    if (cu && prc) { const kgNec = cu.valor / prc.valor * prc.kgSaca, queda = ant && atu && atu.ha < ant.ha;
+      let t = `${queda ? 'Os números levantados na viagem ajudam a explicar essa redução' : 'Os números levantados na viagem mostram a situação econômica da cultura'}: com custo de R$ ${n0(cu.valor)} por hectare e preço de R$ ${prc.valor.toLocaleString('pt-BR', {minimumFractionDigits: 2})} por ${prc.unid === 'kg' ? 'quilo' : `saca de ${prc.kgSaca} kg`}, o produtor precisa colher cerca de ${n0(kgNec)} kg por hectare só para cobrir os custos`;
       if (pd) { const kg = pd.unid === 'kg/ha' ? pd.valor : pd.valor * 60, marg = kg / prc.kgSaca * prc.valor - cu.valor;
-        t += marg < 0 ? `, mais do que a produtividade média de ${n0(kg)} kg: a conta não fecha (prejuízo de cerca de R$ ${n0(-marg)} por hectare), o que ajuda a explicar ${ant && atu && atu.ha < ant.ha ? 'a redução de área' : 'a cautela dos produtores'}` : `, abaixo da produtividade média de ${n0(kg)} kg, o que deixa margem de cerca de R$ ${n0(marg)} por hectare`; }
+        t += marg < 0 ? `, mas a produtividade média fica em torno de ${n0(kg)} kg. A conta não fecha: o prejuízo estimado é de cerca de R$ ${n0(-marg)} por hectare` : `, e a produtividade média, de cerca de ${n0(kg)} kg, deixa margem estimada de R$ ${n0(marg)} por hectare`; }
       p1.push(t + '.'); }
     if (um('credito').length) p1.push('O financiamento da lavoura depende sobretudo de revendas e cooperativas, com acesso difícil ao crédito bancário.');
     // cruzamento com o painel
     const p2 = [], pz = um1('prazo');
     if (sub && Object.keys(sub.mun).length) { const j = semanaDe(c, rel.data), pR = mediaMS(sub, m => acum(m.serie, j)), pE = mediaMS(c, m => acum(m.serie, j)), pA = mediaMS(sub, m => acum(m.serie, j - 2));
       if (pR) { if (pl) p2.push(Math.abs(pl.pct - pR.v) <= 12 ? `O número é consistente com o restante do levantamento: ${n0(pR.v)}% semeado nesses municípios na mesma semana.` : `O levantamento semanal indicava ${n0(pR.v)}% nesses municípios na mesma semana, ${pR.v > pl.pct ? 'mais' : 'menos'} do que o observado em campo; vale conferir esses municípios.`);
-        if (at && pE) p2.push(pR.v < pE.v - 5 ? `Esses municípios estão ${n0(pE.v - pR.v)} pontos percentuais atrás da média do estado, o que confirma o atraso.` : `Esses municípios, porém, andam no mesmo passo do restante do estado (${n0(pR.v)}% contra ${n0(pE.v)}%), sinal de que o atraso é em relação ao calendário habitual da região, e não aos vizinhos.`);
+        if (at && pE) p2.push(pR.v < pE.v - 5 ? `Esses municípios estão ${n0(pE.v - pR.v)} pontos percentuais atrás da média do estado, o que confirma o atraso.` : `Apesar do atraso relatado, esses municípios avançam no mesmo ritmo do restante do estado (${n0(pR.v)}% semeado, contra ${n0(pE.v)}% na média estadual), o que indica que o atraso é em relação ao calendário habitual da região, e não aos demais municípios.`);
         if (pA && pR.v < 95) { const rit = (pR.v - pA.v) / 2; if (rit >= 1) { const d95 = addD(dataSem(c, j), 7 * Math.ceil((95 - pR.v) / rit));
-          p2.push(`No ritmo das duas últimas semanas, de cerca de ${n0(rit)} pontos percentuais por semana, a região deve passar de 95% por volta de ${dExt(d95)}${pz ? (d95 > pz.data ? `, depois do prazo de ${dExt(pz.data)} esperado pelos produtores` : `, dentro do prazo de ${dExt(pz.data)} esperado pelos produtores`) : ''}.`); } } } }
+          p2.push(`No ritmo das duas últimas semanas, de cerca de ${n0(rit)} pontos percentuais por semana, a região deve ultrapassar 95% da área semeada por volta de ${dExt(d95)}${pz ? (d95 > pz.data ? `, depois do prazo de ${dExt(pz.data)} esperado pelos produtores` : `, dentro do prazo de ${dExt(pz.data)} esperado pelos produtores`) : ''}.`); } } } }
     else if (pz) p2.push(`A expectativa é concluir o plantio até ${dExt(pz.data)}.`);
     const cj = (cl.has('excesso') || cl.has('falta')) && CL ? climaJanela(escp, rel.data, 30) : null;
     if (cj) { const umid = pg.some(f => f.itens.some(x => /lesma|caramujo|mofo|antracnose|ferrugem/.test(x)));
-      if (cl.has('excesso')) p2.push(cj.p > cj.e * 1.2 || cj.dch >= 12 || cj.maxSeq >= 4 ? `O clima confirma o relato: nos 30 dias anteriores à viagem choveu ${n0(cj.p)} mm, em ${cj.dch} dias${umid ? ', um ambiente úmido que favorece lesmas, caramujos e doenças, como relatado' : ''}.` : `O clima, no entanto, não mostra chuva fora do normal nos 30 dias anteriores (${n0(cj.p)} mm), o que sugere excesso localizado ou concentrado em poucos dias.`);
+      if (cl.has('excesso')) p2.push(cj.p > cj.e * 1.2 || cj.dch >= 12 || cj.maxSeq >= 4 ? `O clima confirma o relato: nos 30 dias anteriores à viagem choveu ${n0(cj.p)} mm, ${cj.dch >= cj.dias ? 'com chuva todos os dias' : `com chuva em ${cj.dch} dos ${cj.dias} dias`}${umid ? ', ambiente úmido que favorece lesmas, caramujos e doenças, como relatado' : ''}.` : `O clima, no entanto, não mostra chuva fora do normal nos 30 dias anteriores (${n0(cj.p)} mm), o que sugere excesso localizado ou concentrado em poucos dias.`);
       else p2.push(cj.p - cj.e < -30 || cj.dch <= 4 ? `O clima confirma o relato: nos 30 dias anteriores choveu só ${n0(cj.p)} mm, para uma demanda de ${n0(cj.e)} mm.` : `O clima, porém, indica ${n0(cj.p)} mm nos 30 dias anteriores; a falta de água pode ser localizada.`); }
     for (const f of um('conversao')) if (f.escopo.length === 1) { const cd = f.escopo[0], eu = soloClasse('Eucalipto', cd)?.area, sj = soloCultura(cid, cd)?.area;
-      if (eu || sj) p2.push(`${nmMun(cd)} tem cerca de ${eu ? `${n0(eu)} hectares de eucalipto` : 'pouca área de eucalipto'}${sj ? ` e ${n0(sj)} hectares de ${nomeC}` : ''}${sj && f.max ? `; a mudança relatada equivale a ${n0(100 * f.min / sj)}% a ${n0(100 * f.max / sj)}% dessa área, algo a acompanhar nas próximas safras` : ''}.`); }
+      if (eu || sj) p2.push(`${nmMun(cd)} tem hoje cerca de ${eu ? `${haTxt(eu)} de eucalipto` : 'pouca área de eucalipto'}${sj ? ` e ${haTxt(sj)} de ${nomeC}` : ''}${sj && f.max ? `; a troca relatada corresponderia a ${n0(100 * f.min / sj)}%${f.max !== f.min ? ` a ${n0(100 * f.max / sj)}%` : ''} da área de ${nomeC} do município, algo a acompanhar nas próximas safras` : ''}.`); }
     out.push(p1.join(' ')); if (p2.length) out.push(p2.join(' '));
   }
   return out;
@@ -1902,13 +1908,13 @@ async function analisePDFCultura(c, s, n, ini, fim, dias, opts) {
   const S = a.sem, fr = [], comD = S.filter(x => x.pl != null);
   const j1 = comD.find(x => x.pl >= 1);
   if (a.pa?.v >= 5) fr.push(`O período começou, em ${dExt(ini)}, com ${n0(a.pa.v)}% da área de ${nomeC} já semeada.`);
-  else if (j1) fr.push(`A semeadura de ${nomeC} começou na semana até ${dExt(j1.d)}${j1.pl >= 3 ? `, já com ${n0(j1.pl)}% da área` : ', ainda de forma tímida'}.`);
+  else if (j1) fr.push(j1.pl >= 3 ? `Na semana encerrada em ${dExt(j1.d)}, a semeadura da ${nomeC} já alcançava ${n0(j1.pl)}% da área.` : `A semeadura da ${nomeC} começou de forma tímida na semana encerrada em ${dExt(j1.d)}.`);
   const ativas = S.filter(x => x.j >= Math.max(ja, j1?.j || 1) && x.j <= Math.min(jb, jUlt) && x.inc != null);
   if (ativas.length >= 2) { const pico = ativas.reduce((b, x) => x.inc > b.inc ? x : b), lento = ativas.filter(x => x.inc < 3 && x.j < pico.j);
     if (lento.length) fr.push(`Nas primeiras semanas o avanço foi lento${lento.some(x => x.chuva >= 30) ? ', com chuva atrapalhando a entrada das máquinas' : lento.some(x => x.chuva != null && x.chuva < 5) ? ', com o solo ainda seco à espera de chuva' : ''}.`);
-    fr.push(`O ritmo ${lento.length ? 'ganhou força' : 'foi mais forte'} na semana até ${dExt(pico.d)}, quando ${n0(pico.inc)}% da área foi semeada em apenas sete dias${pico.chuva != null ? (pico.chuva >= 30 ? `, mesmo com ${n0(pico.chuva)} mm de chuva` : pico.chuva >= 8 ? `, aproveitando a umidade de ${n0(pico.chuva)} mm de chuva` : ', em uma semana de tempo firme') : ''}.`);
+    fr.push(`O ritmo ${lento.length ? 'ganhou força' : 'foi mais forte'} na semana encerrada em ${dExt(pico.d)}, quando ${n0(pico.inc)}% da área foi semeada em apenas sete dias${pico.chuva != null ? (pico.chuva >= 30 ? `, mesmo com ${n0(pico.chuva)} mm de chuva` : pico.chuva >= 8 ? `, aproveitando a umidade de ${n0(pico.chuva)} mm de chuva` : ', em uma semana de tempo firme') : ''}.`);
     const dep = ativas.filter(x => x.j > pico.j), trava = dep.find(x => x.inc < pico.inc * .4);
-    if (trava) fr.push(`Depois disso, a semeadura perdeu fôlego na semana até ${dExt(trava.d)} (${n0(trava.inc)}%)${trava.chuva >= 30 ? `, quando ${n0(trava.chuva)} mm de chuva seguraram as operações` : ''}.`); }
+    if (trava) fr.push(`Depois disso, a semeadura perdeu fôlego na semana encerrada em ${dExt(trava.d)}, com apenas ${n0(trava.inc)}% da área semeada${trava.chuva >= 30 ? `, quando ${n0(trava.chuva)} mm de chuva seguraram as operações` : ''}.`); }
   const ult = S[jUlt - 1], u2 = S[jUlt - 3];
   if (ult) { let t = `Em ${dExt(ult.d)}, ${n0(ult.pl)}% da área estava semeada`;
     if (ult.ant != null) { const dl = ult.pl - ult.ant; t += Math.abs(dl) < 3 ? `, praticamente o mesmo da safra passada na mesma data (${n0(ult.ant)}%)` : `, ${dl > 0 ? 'à frente' : 'atrás'} da safra passada, que na mesma data tinha ${n0(ult.ant)}%`; a.destAnt = Math.abs(dl) >= 5 ? `${dl > 0 ? 'à frente' : 'atrás'} da safra passada (${n0(ult.ant)}%)` : null; }
@@ -1924,11 +1930,12 @@ async function analisePDFCultura(c, s, n, ini, fim, dias, opts) {
     return {r, n: ms.length, area: ms.reduce((t, m) => t + (m.area || 0), 0), a: mediaMS(cc, m => acum(m.serie, ja))?.v ?? 0, b: mediaMS(cc, m => acum(m.serie, jb))?.v ?? 0, k: mediaMS(cc, m => pctCritico(c, m, jb))?.v ?? 0}; }).sort((x, y) => y.area - x.area || x.r.localeCompare(y.r));
   const rs = a.regs.filter(r => r.area > 0), ord = [...rs].sort((x, y) => y.b - x.b);
   if (ord.length >= 3) { const sp = ord[0].b - ord.at(-1).b;
-    fr.push(sp >= 20 ? `O mapa do plantio não é uniforme: a região de ${ord[0].r} vai na frente, com ${n0(ord[0].b)}%, enquanto ${ord.at(-1).r} está em ${n0(ord.at(-1).b)}%. ${rs[0].r}, que concentra a maior área, está em ${n0(rs[0].b)}%.` : `As regiões andam em ritmo parecido, entre ${n0(ord.at(-1).b)}% (${ord.at(-1).r}) e ${n0(ord[0].b)}% (${ord[0].r}).`); }
+    const rg = r => r.replace(/ - /g, '-');
+    fr.push(sp >= 20 ? `O avanço não é uniforme no estado: a região de ${rg(ord[0].r)} está à frente, com ${n0(ord[0].b)}% da área semeada, enquanto a de ${rg(ord.at(-1).r)} está em ${n0(ord.at(-1).b)}%. A região de ${rg(rs[0].r)}, que concentra a maior área, está em ${n0(rs[0].b)}%.` : `As regiões avançam em ritmo parecido, entre ${n0(ord.at(-1).b)}% (${rg(ord.at(-1).r)}) e ${n0(ord[0].b)}% (${rg(ord[0].r)}).`); }
   a.txtPlantio = fr.join(' ');
   // --- tempo e água
   if (a.serie?.length) { const p = a.serie.reduce((t, x) => t + x.p, 0), e = a.serie.reduce((t, x) => t + x.e, 0); a.chuvaTot = p;
-    a.txtTempo = `${historiaTempo(a.serie)} No balanço do período, choveu ${n0(p)} mm nas áreas de ${nomeC}, ${p > e * 1.15 ? 'acima' : p < e * .85 ? 'abaixo' : 'perto'} da água que o ambiente consumiu (${n0(e)} mm).`; }
+    a.txtTempo = `${historiaTempo(a.serie)} No balanço do período, choveu ${n0(p)} mm nas áreas de ${nomeC}, ${p > e * 1.15 ? 'mais do que' : p < e * .85 ? 'menos do que' : 'praticamente o mesmo que'} o solo e as plantas perderam por evaporação (${n0(e)} mm).`; }
   // --- o que vem pela frente
   const cal = calendarioCritico(c, serieEstado(c)).filter(x => x[1] && x[1] >= addD(HOJE, -3)); let crit3 = 0; for (let j = semanaDe(c, HOJE); j <= semanaDe(c, HOJE) + 3; j++) crit3 = Math.max(crit3, mediaMS(c, m => pctCritico(c, m, j))?.v || 0);
   const dist = new Array(c.estadios.length).fill(0); let sw = 0; const jh = semanaDe(c, HOJE);
@@ -1939,7 +1946,7 @@ async function analisePDFCultura(c, s, n, ini, fim, dias, opts) {
   if (top.length) fr2.push(`Hoje, a maior parte das lavouras semeadas está ${fase(top[0][1])}${top[1] ? `, e cerca de ${n0(top[1][0])}% ${fase(top[1][1])}` : ''}.`);
   if (cal.length) fr2.push(`A expectativa é que metade da área semeada chegue ao ${cal[0][0].toLowerCase().replace(/\s*\(.*\)/, '')} por volta de ${dExt(cal[0][1])}${cal[1] ? ` e ao ${cal.at(-1)[0].toLowerCase().replace(/\s*\(.*\)/, '')} perto de ${dExt(cal.at(-1)[1])}` : ''}. A partir daí, o clima passa a pesar mais na produtividade.`);
   if (CL) { const mc = climaPonderado(pesos)?.mc, h0 = iHoje(); if (mc) { const p15 = mc.p.slice(h0, h0 + 15).reduce((t, x) => t + (x || 0), 0), cc = concordancia(totaisModelos(mc, h0, h0 + 7));
-    fr2.push(`Para os próximos 15 dias, a previsão indica ${n0(p15)} mm de chuva nas áreas de ${nomeC}${cc ? (cc.nivel === 'alta' ? ', com boa confiança' : cc.nivel === 'baixa' ? ', mas com bastante incerteza' : '') : ''}.`); a.p15 = p15; } }
+    fr2.push(`Para os próximos 15 dias, a previsão indica ${n0(p15)} mm de chuva nas áreas de ${nomeC}${cc ? (cc.nivel === 'alta' ? ', com boa concordância entre as previsões' : cc.nivel === 'baixa' ? ', mas com bastante incerteza' : '') : ''}.`); a.p15 = p15; } }
   a.txtFrente = fr2.join(' '); a.crit3 = crit3;
   // --- campo
   const noP = r => r.data >= ini && r.data <= addD(fim, 1);
@@ -1947,7 +1954,7 @@ async function analisePDFCultura(c, s, n, ini, fim, dias, opts) {
   a.prosa = opts.campo ? prosaRelatos(cid, noP) : [];
   // frase-resumo para a primeira página
   let m = ult ? `A ${nomeC} chegou a ${n0(ult.pl)}% da área semeada${a.destAnt ? `, ${a.destAnt}` : ''}${a.dFim ? ` e, no ritmo atual, deve alcançar ${a.alvo}% por volta de ${dExt(a.dFim)}` : ''}` : `A semeadura de ${nomeC} ainda não começou`;
-  if (a.agua?.dest) m += `; no período, a cultura ${a.agua.dest}`; else if (a.agua) m += ', sem falta de água relevante até aqui';
+  if (a.agua?.dest) m += `; ${a.agua.dest}`; else if (a.agua) m += ', sem falta de água relevante até aqui';
   a.manchete = m.replace(/^A (milho|feijão|sorgo|trigo|arroz|amendoim|algodão)/i, 'O $1') + '.'; a.sc = soloCultura(cid, null); a.rc = opts.clima ? resumoClima(dias, pesos) : null;
   return a;
 }
@@ -1959,11 +1966,11 @@ async function analisePDFCana(ini, fim, dias, opts) {
   a.txtArea = `O mapeamento da Aprosoja-MS identifica ${haTxt(a.area)} de cana em ${a.nMun} municípios. A cultura se concentra nas regiões de ${lista(top.map(([r]) => r))}, que somam ${n0(100 * top.reduce((t, x) => t + x[1], 0) / a.area)}% da área; os maiores municípios são ${lista(l.sort((x, y) => y[1].area - x[1].area).slice(0, 3).map(([cd]) => nmMun(cd)))}.`;
   if (opts.clima) { const dc = await climaDiario(addD(ini, -30), addD(HOJE, 16)); a.serie = serieDias(dc, pesos, ini, fim < HOJE ? fim : addD(HOJE, -1));
     a.R = restricaoPeriodo(c, 'cana', ini, dc).filter(x => deISO(x.d) <= addD(fim > HOJE ? fim : HOJE, 15)); a.agua = historiaAgua(a.R, () => 0, 'cana', true);
-    if (a.serie.length) { const p = a.serie.reduce((t, x) => t + x.p, 0), e = a.serie.reduce((t, x) => t + x.e, 0); a.chuvaTot = p; a.txtTempo = `${historiaTempo(a.serie)} No balanço do período, choveu ${n0(p)} mm nos canaviais, ${p > e * 1.15 ? 'acima' : p < e * .85 ? 'abaixo' : 'perto'} da água que o ambiente consumiu (${n0(e)} mm).`; } }
+    if (a.serie.length) { const p = a.serie.reduce((t, x) => t + x.p, 0), e = a.serie.reduce((t, x) => t + x.e, 0); a.chuvaTot = p; a.txtTempo = `${historiaTempo(a.serie)} No balanço do período, choveu ${n0(p)} mm nos canaviais, ${p > e * 1.15 ? 'mais do que' : p < e * .85 ? 'menos do que' : 'praticamente o mesmo que'} o solo e as plantas perderam por evaporação (${n0(e)} mm).`; } }
   const noP = r => r.data >= ini && r.data <= addD(fim, 1); a.rels = RELATOS.filter(r => r.cults.has('cana') && noP(r)); a.fts = FOTOS.filter(p => p.cult === 'cana' && p.data >= ini && p.data <= addD(fim, 1));
   a.prosa = opts.campo ? prosaRelatos('cana', noP) : []; a.sc = soloCultura('cana', null); a.rc = opts.clima ? resumoClima(dias, pesos) : null;
   const hoje = a.R?.filter(x => !x.prev && x.r != null).at(-1);
-  a.manchete = `Nos ${haTxt(a.area)} de cana mapeados, ${hoje ? (hoje.r >= 5 ? `${n0(hoje.r)}% dos canaviais estão hoje com falta de água` : 'a água do solo atende hoje praticamente todos os canaviais') : 'a água no solo não pôde ser avaliada'}${a.agua?.dest ? `, e a cultura ${a.agua.dest.replace(/^teve/, 'chegou a ter')}` : ''}.`;
+  a.manchete = `Nos ${haTxt(a.area)} de cana mapeados, ${hoje ? (hoje.r >= 5 ? `${n0(hoje.r)}% dos canaviais estão hoje com falta de água` : 'a água do solo atende hoje praticamente todos os canaviais') : 'a água no solo não pôde ser avaliada'}${hoje?.r >= 5 && a.agua?.pico?.r >= hoje.r + 10 ? `; no pior momento do período, em ${dExt(deISO(a.agua.pico.d))}, essa parcela chegou a ${n0(a.agua.pico.r)}%` : a.agua?.dest ? `; ${a.agua.dest}` : ''}.`;
   return a;
 }
 // estado da água no solo hoje (balanço FAO-56 por município) — tabela do anexo
@@ -2009,12 +2016,12 @@ function graficoRestricaoPDF(doc, a, ctx) {
   for (const k of [3, 2, 1]) { doc.setFillColor(...cores[k]); for (let i = 1; i < n; i++) { const a0 = base[i - 1], a1 = base[i], b0 = a0 + R[i - 1].pct[k], b1 = a1 + R[i].pct[k];
       if (b0 - a0 < .05 && b1 - a1 < .05) continue; doc.triangle(X(i - 1), Y(a0), X(i), Y(a1), X(i), Y(b1), 'F'); doc.triangle(X(i - 1), Y(a0), X(i), Y(b1), X(i - 1), Y(b0), 'F'); }
     R.forEach((x, i) => base[i] += x.pct[k]); }
-  if (Math.max(...R.map(x => x.r || 0)) < 2) { doc.setFont('times', 'italic'); doc.setFontSize(9.5); doc.setTextColor(...CINZA); doc.text('sem falta de água nas áreas em campo durante todo o período', gx + gw / 2, Y(55), {align: 'center'}); }
+  if (Math.max(...R.map(x => x.r || 0)) < 2) { doc.setFont('times', 'italic'); doc.setFontSize(9.5); doc.setTextColor(...CINZA); doc.text('sem falta de água nas lavouras durante todo o período', gx + gw / 2, Y(55), {align: 'center'}); }
   if (!a.cana) { doc.setDrawColor(47, 107, 58); doc.setLineWidth(.45); doc.setLineDashPattern([1.2, .8], 0); for (let i = 1; i < n; i++) { const c0 = a.critDe ? a.critDe(deISO(R[i - 1].d)) : 0, c1 = a.critDe ? a.critDe(deISO(R[i].d)) : 0; doc.line(X(i - 1), Y(c0), X(i), Y(c1)); } doc.setLineDashPattern([], 0); }
   doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.setTextColor(...CINZA); const passo = Math.max(1, Math.round(n / 8));
   R.forEach((x, i) => { if (i % passo === 0) doc.text(fmtD(deISO(x.d)).slice(0, 5), X(i), gy + gh + 3.3, {align: 'center'}); });
   const leg = [['b', cores[1], 'restrição leve'], ['b', cores[2], 'moderada'], ['b', cores[3], 'severa']]; if (!a.cana) leg.push(['t', [47, 107, 58], '% da área em fase crítica']);
-  legendaPDF(doc, leg, gx, gy + gh + 8, CINZA); doc.text('% da área em campo', gx + gw, gy + gh + 8, {align: 'right'}); ctx.setY(gy + gh + 13);
+  legendaPDF(doc, leg, gx, gy + gh + 8, CINZA); doc.text('% da área cultivada', gx + gw, gy + gh + 8, {align: 'right'}); ctx.setY(gy + gh + 13);
 }
 function legendaPDF(doc, itens, x, y, CINZA) {
   doc.setFont('helvetica', 'normal'); doc.setFontSize(6.8);
@@ -2065,13 +2072,13 @@ async function gerarPDF(ini, fim, sel, opts) {
   const serieT = opts.clima ? serieDias(dias, pesosT, ini, fim < HOJE ? fim : addD(HOJE, -1)) : [];
   h2('Panorama');
   if (serieT.length) { const p = serieT.reduce((t, x) => t + x.p, 0), e = serieT.reduce((t, x) => t + x.e, 0);
-    txt(`Entre ${dExt(ini)} e ${dExt(fim)}, as áreas agrícolas do estado receberam em média ${n0(p)} mm de chuva, ${p > e * 1.15 ? 'mais do que' : p < e * .85 ? 'menos do que' : 'perto do que'} o ambiente consumiu no mesmo período. ${historiaTempo(serieT)}`); }
+    txt(`Entre ${dExt(ini)} e ${dExt(fim)}, as áreas agrícolas do estado receberam em média ${n0(p)} mm de chuva, ${p > e * 1.15 ? 'mais do que' : p < e * .85 ? 'menos do que' : 'praticamente o mesmo que'} o solo e as plantas perderam por evaporação no mesmo período (${n0(e)} mm). ${historiaTempo(serieT)}`); }
   txt(A.map(a => a.manchete).join(' '));
   y += 2;
   for (const a of A) { garantir(24); doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(...TINTA); doc.text(pdfTxt(a.n), M, y); y += 4.5;
     const hj = a.R?.filter(x => !x.prev && x.r != null).at(-1);
     numeros(a.cana ? [[haTxt(a.area).replace(' de hectares', ' ha').replace(' hectares', ' ha'), 'mapeados (Aprosoja-MS)'], [hj ? n0(hj.r) + '%' : '—', 'dos canaviais com falta de água hoje'], [a.chuvaTot != null ? n0(a.chuvaTot) + ' mm' : '—', 'de chuva no período']]
-      : [[a.jUlt ? n0(a.sem[a.jUlt - 1].pl) + '%' : '—', `semeado (${a.jUlt ? fmtD(a.sem[a.jUlt - 1].d).slice(0, 5) : ''})`], [a.pa && a.pb ? '+' + n0(a.pb.v - a.pa.v) : '—', 'pontos percentuais de avanço no período'], [hj ? n0(hj.r) + '%' : '—', 'da área em campo com falta de água hoje'], [a.chuvaTot != null ? n0(a.chuvaTot) + ' mm' : '—', 'de chuva no período']]); }
+      : [[a.jUlt ? n0(a.sem[a.jUlt - 1].pl) + '%' : '—', `semeado (${a.jUlt ? fmtD(a.sem[a.jUlt - 1].d).slice(0, 5) : ''})`], [a.pa && a.pb ? '+' + n0(a.pb.v - a.pa.v) : '—', 'pontos percentuais de avanço no período'], [hj ? n0(hj.r) + '%' : '—', 'da área cultivada com falta de água hoje'], [a.chuvaTot != null ? n0(a.chuvaTot) + ' mm' : '—', 'de chuva no período']]); }
   nota('Números do estado ponderados pela área de cada cultura. Semeadura: planilha semanal da SEGEO-MS. Clima: reanálise ERA5 e modelos numéricos (Open-Meteo), com evapotranspiração ajustada pelas estações do INMET. Falta de água: balanço hídrico do solo por município (FAO-56). Dados preliminares, sujeitos a revisão; associações entre indicadores não implicam causa.');
   // ---------- uma seção por cultura ----------
   for (const a of A) {
