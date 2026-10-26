@@ -598,7 +598,7 @@ defCam('est', {grupo: 'clima', nome: 'Estações INMET',
 // =====================================================================
 // FOTOS DE CAMPO (cultura pela subpasta; posição pelo GPS ou pelo carimbo)
 // =====================================================================
-const CACHE_FOTOS = 'painel-safra.fotos.v3';
+const CACHE_FOTOS = 'painel-safra.fotos.v4';   // v4: carimbo com hemisfério antes do número (S 21.6°, W 54.4°)
 let fotoFiltro = null;      // Set de ids de cultura visíveis (null = todas)
 const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 let _ocr = null;
@@ -673,9 +673,14 @@ function numeroGeo(tok, lim, hemNeg) {
   return null;
 }
 function interpretarCarimbo(txt) {
-  const t = String(txt || '').replace(/[Oo](?=\d)/g, '0').replace(/[‐‑–—~]/g, '-'), out = {};
+  const t = String(txt || '').replace(/[Oo](?=\d)/g, '0').replace(/[‐‑–—~]/g, '-').replace(/([.,]\d+) +(?=\d)/g, '$1'), out = {};
+  // 0) hemisfério antes do número: "S 21.646588°, W 54.451925°" (carimbo de câmera do iPhone e outros apps)
+  const h = t.match(/(?:^|[^A-Za-z])([NS5])\s*(\d{1,2}[.,]\d{2,7})\s*°?\s*[,;]?\s*([EWLO])\s*(\d{1,3}[.,]\d{2,7})/i);
+  if (h) { let lat = parseFloat(h[2].replace(',', '.')), lon = parseFloat(h[4].replace(',', '.'));
+    if (/[s5]/i.test(h[1])) lat = -lat; if (/[wo]/i.test(h[3])) lon = -lon;
+    if (Math.abs(lat) <= 90 && Math.abs(lon) <= 180) { out.lat = lat; out.lon = lon; } }
   // 1) formato normal: lat [S] [,;] lon [W]
-  const m = t.match(/(-?\d{1,2}[.,]\d{2,7})\s*°?\s*([NS])?\s*[,;]?\s+(-?\d{1,3}[.,]\d{2,7})\s*°?\s*([EWLO])?/i)
+  const m = out.lat != null ? null : t.match(/(-?\d{1,2}[.,]\d{2,7})\s*°?\s*([NS])?\s*[,;]?\s+(-?\d{1,3}[.,]\d{2,7})\s*°?\s*([EWLO])?/i)
     || t.match(/(-?\d{1,2}[.,]\d{2,7})\s*°?\s*([NS])?\s*[,;]\s*(-?\d{1,3}[.,]\d{2,7})\s*°?\s*([EWLO])?/i);
   if (m) { let lat = parseFloat(m[1].replace(',', '.')), lon = parseFloat(m[3].replace(',', '.'));
     if (/s/i.test(m[2] || '')) lat = -Math.abs(lat); if (/[wo]/i.test(m[4] || '')) lon = -Math.abs(lon);
