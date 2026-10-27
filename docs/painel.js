@@ -1733,7 +1733,7 @@ const METODOLOGIA = `
 <p><b>Consistência.</b> Antes de somar, o painel corrige unidades evidentemente trocadas (moagem, milho, DDG ou transporte informados em toneladas em vez de mil toneladas, reconhecidos por valores mil vezes maiores que os das outras avaliações da mesma usina ou que a moagem), trata como não preenchida uma avaliação com moagem abaixo de 30% das demais da mesma usina ou com área que cai mais de 40% sem a moagem acompanhar e, quando um bloco não foi preenchido na avaliação mais recente, usa a anterior. Todos os ajustes ficam listados no anexo do resumo, pelo código do questionário.</p>
 <p><b>Indicadores.</b> Estimativa atual = avaliação mais recente preenchida por cada usina. Comparações com a safra anterior e entre avaliações usam sempre o mesmo conjunto de usinas. Produtividade média ponderada pela área; ATR ponderado pela cana moída. Mix em ATR pelos fatores do Consecana (1,0495 kg de ATR por kg de açúcar; 1,7651 e 1,6913 kg por litro de etanol anidro e hidratado). Idade do canavial pela área de cada corte; a necessidade de renovação de 15% a 20% ao ano corresponde a ciclos de cinco a seis cortes. Uso da capacidade = moagem ÷ (capacidade diária × dias de safra). A área equivalente do milho moído usa 90 sacas por hectare como referência, e as residências abastecidas pela energia vendida usam consumo de 160 kWh por mês, ambos apenas para dar escala aos números. As usinas são agrupadas em polos (Centro-Sul, Vale do Ivinhema, Norte e Bolsão) pela região imediata do município; dados de usinas individuais não aparecem no resumo.</p>
 <p><b>Cruzamentos.</b> A chuva informada pelas usinas é comparada à média histórica delas e à produtividade de cada polo; a área informada é comparada à do mapeamento de uso do solo; os relatórios de viagem de cana são confrontados com o calendário de colheita, o ATR, a produtividade e o mix das usinas dos municípios visitados, com a chuva do mês citado (histórico do painel) e com os mapas de solos, eucalipto, milho e sorgo. Relatórios de cana sem data no período do resumo entram se forem dos últimos seis meses.</p>
-<p><b>Coerência entre fontes.</b> Quando duas fontes não fecham, o resumo diz isso e explica o motivo provável, em vez de apresentar números contraditórios. A moagem e a tabela de área e produtividade são comparadas sobre as mesmas usinas; se área × produtividade se afastar mais de 5% da moagem, o texto aponta a diferença e usa a moagem como medida de volume. Relatórios de campo de uma safra mais nova que a das planilhas usam as planilhas só como referência do que é habitual. No atraso de colheita, o calendário planejado pelas próprias usinas é comparado à referência citada na visita, e o resumo apresenta a faixa entre as duas. Uma chuva citada no relatório e não confirmada pelo modelo é discutida pela frequência de dias com chuva e pela resolução do modelo; a observação de campo é mantida, com a ressalva. Valores extremos, como uma perda de ATR que levaria a um nível historicamente baixo, são tratados como pior cenário. Um mix mais açucareiro em meio a insatisfação com o preço do açúcar é sinalizado como provável diferença de base (volume ou ATR). A seção “Levantamento de campo” traz o que o relatório acrescenta, sem repetir números já apresentados.</p>
+<p><b>Coerência entre fontes.</b> Quando duas fontes não fecham, o resumo diz isso e explica o motivo provável, em vez de apresentar números contraditórios. A moagem e a tabela de área e produtividade são comparadas sobre as mesmas usinas; se área × produtividade se afastar mais de 5% da moagem, o texto aponta a diferença e usa a moagem como medida de volume. Relatórios de campo de uma safra mais nova que a das planilhas usam as planilhas só como referência do que é habitual. No atraso de colheita, o calendário planejado pelas próprias usinas é comparado à referência citada na visita, e o resumo apresenta a faixa entre as duas. Uma chuva citada no relatório e não confirmada pelo modelo é discutida pela frequência de dias com chuva e pela resolução do modelo; a observação de campo é mantida, com a ressalva. Valores extremos, como uma perda de ATR que levaria a um nível historicamente baixo, são tratados como pior cenário. Um mix mais açucareiro em meio a insatisfação com o preço do açúcar é sinalizado como provável diferença de base (volume ou ATR). A seção “Levantamento de campo” traz o que o relatório acrescenta, sem repetir números já apresentados. Além dos fatos lidos pelas regras, entram as observações qualitativas mais informativas do relatório (frases sobre produtividade, colheita, clima, pragas, mercado, investimentos, riscos e tendências), escolhidas por pontuação, mantidas na ordem do texto original e apresentadas como relato da equipe; frases que repetem o que já foi escrito ou que dependem da frase anterior para fazer sentido são descartadas. Um relatório sem nenhum número também é considerado.</p>
 <h3>12. Limitações</h3>
 <ul><li>A projeção fenológica usa calendário médio, sem considerar temperatura (graus-dia), cultivar ou grupo de maturação.</li>
 <li>Os dados de clima por município são estimativas em um ponto e não captam a variabilidade da chuva dentro do município. A média de modelos suaviza chuvas intensas e localizadas.</li>
@@ -2113,11 +2113,43 @@ async function carregarUsinas(lista) {
   const st = $('st-pasta'); st.innerHTML += `<br>Usinas: ${US.length} questionários da safra ${esc(s)}${avisos.length ? ` · ${avisos.length} ajuste${avisos.length > 1 ? 's' : ''} de consistência` : ''}`;
 }
 // relatos de cana contados como texto corrido e cruzados com as planilhas das usinas, o clima e os mapas
+// informações qualitativas do relatório que as regras numéricas não captam: escolhe as frases mais informativas
+// (fatos, problemas, mercado, tendências), sem repetir o que já foi escrito, e as apresenta como relato da equipe
+const CATS_ESCRITAS = new Set(['plantio', 'atraso', 'paralisacao', 'replantio', 'conversao', 'area', 'clima', 'pragas', 'estadio', 'prazo', 'credito', 'custo', 'preco', 'produtividade',
+  'colheita', 'colheitaEsperada', 'atrasoColheita', 'climaMes', 'atrImpacto', 'variedades', 'tch', 'mix', 'precoSent', 'milhoCompra', 'milhoContrato', 'milhoOrigem', 'siloBag', 'estoque', 'cavaco', 'sorgoPct']);
+const PALAVRAS_INFO = /produtiv|colheit|plantio|semeadura|chuva|estiagem|seca|preço|preco|custo|área|qualidade|praga|doença|doenca|mercado|demanda|estoque|investiment|usina|export|crédito|credito|tendênc|expectativa|redução|reducao|aumento|queda|alta |atras|adiant|perda|dificuldade|desafio|risco|preocupa|cultivar|variedade|insumo|fertiliz|diesel|frete|armazen|comercializ|contrato|rentabil|margem|clima|geada|irriga|manejo|tecnologia|mecaniza/gi;
+const CATS_CANA = new Set(['colheita', 'colheitaEsperada', 'atrasoColheita', 'atrImpacto', 'pragas', 'variedades', 'tch', 'mix', 'precoSent', 'milhoCompra', 'milhoContrato', 'milhoOrigem', 'siloBag', 'estoque', 'cavaco', 'sorgoPct']);
+function trechosRelevantes(rel, {cid, jaEscrito = '', max = 4} = {}) {
+  const cats = rel.grupo === 'cana' ? CATS_CANA : CATS_ESCRITAS, usadas = (rel.fatos || []).filter(f => cats.has(f.cat)).map(f => norm(f.frase).slice(0, 60));
+  const numsJa = new Set((norm(jaEscrito).match(/\d+(?:[.,]\d+)?/g) || []));
+  const ps = cid && rel.grupo !== 'cana' ? (PALAVRAS_CULT[cid] || []) : null, palavras = t => new Set(norm(t).match(/[a-z]{5,}/g) || []), ja = palavras(jaEscrito);
+  let secao = null; const fr = [];
+  for (const linha of rel.texto.split(/\n+/).map(x => x.trim()).filter(Boolean)) { const sc = cidSecao(linha); if (sc) { secao = sc; continue; }
+    for (const f of linha.split(/(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÂÊÔÃÕÇ])/)) fr.push({f: f.trim(), secao}); }
+  const cand = fr.map((x, i) => ({...x, i})).filter(({f, secao}) => {
+    const n = norm(f); if (f.length < 50 || f.length > 420 || !/[.!?]$/.test(f) || f === f.toUpperCase()) return false;
+    if (/^(esse|essa|esses|essas|isso|este|esta|estes|estas|tal|tais|para (reduzir|evitar|minimizar) (esse|essa|isso|o problema))\b/.test(n)) return false;   // depende da frase anterior
+    if (/objetivo (foi|do)|foram visitad|este relatorio|o levantamento foi realizado|nesta viagem|a equipe (percorreu|visitou)/.test(n)) return false;
+    if (usadas.some(u => n.startsWith(u))) return false;
+    if (ps && !(secao === cid || (!secao && ps.some(p => n.includes(p))))) return false;
+    const w = palavras(f); let rep = 0; w.forEach(x => ja.has(x) && rep++); if (w.size && rep / w.size >= .5) return false;   // já dito com outras palavras
+    const nums = n.match(/\d+(?:[.,]\d+)?/g) || []; if (nums.length && nums.every(x => numsJa.has(x))) return false;   // números que o texto já trouxe
+    return true; });
+  cand.forEach(x => { x.pt = (x.f.match(/\d/g) ? 2 : 0) + Math.min(3, (x.f.match(PALAVRAS_INFO) || []).length); });
+  return cand.filter(x => x.pt >= 1).sort((a, b) => b.pt - a.pt || a.i - b.i).slice(0, max).sort((a, b) => a.i - b.i).map(x => x.f);
+}
+function paragrafoQualitativo(frases, complemento = true) {
+  if (!frases.length) return null; let [f0, ...rest] = frases;
+  f0 = f0.replace(/^(Além disso|Ademais|Também|Por outro lado|Entretanto|No entanto|Porém|Assim|Dessa forma|Nesse sentido|Por fim),\s*/i, ''); f0 = f0[0].toUpperCase() + f0.slice(1);
+  const w = f0.split(' ')[0]; if (/^[A-ZÁÉÍÓÚÂÊÔÃÕÇ][a-záéíóúâêôãõç-]*,?$/.test(w) && !/^(Mato|Brasil|Conab|Embrapa|Aprosoja|Sul|Norte|Dourados|Campo)/.test(w)) f0 = f0[0].toLowerCase() + f0.slice(1);
+  const pre = complemento ? vr('qualit', ['O relatório registra ainda que ', 'Também segundo o relatório, ', 'A equipe observou, além disso, que ']) : vr('qualit0', ['Segundo o relatório, ', 'De acordo com a equipe, ']);
+  return `${pre}${f0} ${rest.join(' ')}`.trim();
+}
 async function prosaRelatosCana(filtro, R) {
   // regras: o relatório traz o que é novo; as planilhas (safra passada) e os mapas só entram para confirmar,
   // dar escala ou explicar uma diferença, sem repetir números já apresentados nas seções anteriores
   const out = [];
-  for (const rel of RELATOS.filter(r => r.grupo === 'cana' && (!filtro || filtro(r)) && r.fatos?.length)) {
+  for (const rel of RELATOS.filter(r => r.grupo === 'cana' && (!filtro || filtro(r)))) {
     const fs = rel.fatos, um = k => fs.filter(f => f.cat === k), um1 = k => um(k)[0];
     const rot = [...new Set(fs.filter(f => f.tipoEsc === 'regiao').flatMap(f => f.escopo))], escp = rot.length ? rot : [...rel.muns];
     const tn = norm(rel.texto), mq = tn.match(/(primeira|segunda|terceira|quarta|ultima) semana de ([a-z]+)/), mE = /entre os dias (\d{1,2}) e (\d{1,2}) de ([a-zç]+)/i.exec(rel.texto);
@@ -2174,7 +2206,9 @@ async function prosaRelatosCana(filtro, R) {
       p4.push(t); }
     if (cv) { const eu = soloClasse('Eucalipto', null)?.area; p4.push(`A principal fonte de energia dessas usinas é o cavaco de madeira${cv.celulose ? ', o que as coloca em disputa por madeira com as novas fábricas de celulose' : ''}${eu ? `; o estado tem ${haTxt(eu)} de eucalipto mapeados, base para os dois usos` : ''}. Mesmo assim, as usinas veem o cenário como promissor e sinalizam novos investimentos.`); }
     if (so) { const sa2 = soloClasse('Sorgo', null)?.area; p4.push(`O sorgo entra no máximo com ${so.pct}% do volume, e só nas usinas mais novas, por exigir adaptações nos equipamentos. A expansão do sorgo no estado${sa2 ? ` (${haTxt(sa2)} mapeados na segunda safra de 2025)` : ''} responde mais à janela de plantio do produtor que à demanda das usinas.`); }
-    for (const p of [p1, p2, p3, p4]) if (p.length) out.push(p.join(' '));
+    const novos = [p1, p2, p3, p4].filter(p => p.length).map(p => p.join(' '));
+    const q = paragrafoQualitativo(trechosRelevantes(rel, {jaEscrito: novos.join(' '), max: novos.length > 2 ? 3 : 8}), novos.length > 1);
+    if (novos.length <= 1 && !q) continue; out.push(...novos); if (q) out.push(q);
   }
   return out;
   function i1ok(a, m) { return new Date(a, m + 1, 0, 12) < HOJE && typeof climaDiario === 'function'; }
@@ -2316,7 +2350,7 @@ function historiaAgua(R, critDe, nomeC, cana) {
 // relatos de viagem contados como texto corrido, já cruzados com os dados do painel
 function prosaRelatos(cid, filtro) {
   const out = [], nomeC = (CULT[cid] || OUTRA).nome.toLowerCase();
-  for (const rel of RELATOS.filter(r => (!filtro || filtro(r)) && (r.fatos || []).some(f => f.cid === cid))) {
+  for (const rel of RELATOS.filter(r => (!filtro || filtro(r)) && ((r.fatos || []).some(f => f.cid === cid) || r.cults.has(cid)))) {
     const fs = rel.fatos.filter(f => f.cid === cid), um = k => fs.filter(f => f.cat === k), um1 = k => um(k)[0];
     const rot = [...new Set(fs.filter(f => f.tipoEsc === 'regiao').flatMap(f => f.escopo))], escp = rot.length ? rot : [...new Set(fs.flatMap(f => f.escopo))];
     const regs = [...new Set(escp.map(cd => MUN_IDX[cd]?.properties.NM_RGI).filter(Boolean))];
@@ -2365,8 +2399,9 @@ function prosaRelatos(cid, filtro) {
       else p2.push(cj.p - cj.e < -30 || cj.dch <= 4 ? `${vr('confClima', ['O clima confirma o relato', 'Os registros de chuva sustentam a observação', 'A informação é compatível com os dados de clima'])}: nos 30 dias anteriores choveu só ${n0(cj.p)} mm, para uma demanda de ${n0(cj.e)} mm.` : `O clima, porém, indica ${n0(cj.p)} mm nos 30 dias anteriores; a falta de água pode ser localizada.`); }
     for (const f of um('conversao')) if (f.escopo.length === 1) { const cd = f.escopo[0], eu = soloClasse('Eucalipto', cd)?.area, sj = soloCultura(cid, cd)?.area;
       if (eu || sj) p2.push(`${nmMun(cd)} tem hoje cerca de ${eu ? `${haTxt(eu)} de eucalipto` : 'pouca área de eucalipto'}${sj ? ` e ${haTxt(sj)} de ${nomeC}` : ''}${sj && f.max ? `; a troca relatada corresponderia a ${n0(100 * f.min / sj)}%${f.max !== f.min ? ` a ${n0(100 * f.max / sj)}%` : ''} da área de ${nomeC} do município, algo a acompanhar nas próximas safras` : ''}.`); }
-    if (p1.length + p2.length <= 1 && !p2.length && p1.every(t => /percorreu|passou por|roteiro da equipe/.test(t))) continue;   // só a frase da viagem: nada a acrescentar
-    out.push(p1.join(' ')); if (p2.length) out.push(p2.join(' '));
+    const q = paragrafoQualitativo(trechosRelevantes(rel, {cid, jaEscrito: [...p1, ...p2].join(' '), max: p2.length ? 3 : 5}), p1.length + p2.length > 1);
+    if (p1.length + p2.length <= 1 && !p2.length && !q && p1.every(t => /percorreu|passou por|roteiro da equipe/.test(t))) continue;   // só a frase da viagem: nada a acrescentar
+    out.push(p1.join(' ')); if (p2.length) out.push(p2.join(' ')); if (q) out.push(q);
   }
   return out;
 }
@@ -2458,7 +2493,8 @@ async function analisePDFCana(ini, fim, dias, opts) {
     if (a.serie.length) { const p = a.serie.reduce((t, x) => t + x.p, 0), e = a.serie.reduce((t, x) => t + x.e, 0); a.chuvaTot = p; a.txtTempo = `${historiaTempo(a.serie)} No balanço do período, choveu ${n0(p)} mm nos canaviais, ${p > e * 1.15 ? 'mais do que' : p < e * .85 ? 'menos do que' : 'praticamente o mesmo que'} o solo e as plantas perderam por evaporação (${n0(e)} mm).`; } }
   // relatos de cana: os do período ou, se não houver, os dos últimos seis meses (o levantamento de cana é menos frequente)
   const noP = r => r.data >= ini && r.data <= addD(fim, 1), recente = r => r.data >= addD(fim < HOJE ? fim : HOJE, -200) && r.data <= addD(fim, 1);
-  const relCana = RELATOS.filter(r => r.grupo === 'cana'), filtroC = relCana.some(noP) ? noP : recente;
+  const relCana = RELATOS.filter(r => r.grupo === 'cana'), ultimoC = relCana.filter(r => r.data <= addD(fim, 1) && r.data >= addD(fim, -365)).sort((p, q) => q.data - p.data)[0];
+  const filtroC = relCana.some(noP) ? noP : relCana.some(recente) ? recente : (r => r === ultimoC);
   a.rels = RELATOS.filter(r => r.cults.has('cana') && (r.grupo === 'cana' ? filtroC(r) : noP(r)));
   a.U = USINAS?.R || null; a.UT = a.U?.textos || null; a.Uav = USINAS?.avisos || [];
   a.prosa = opts.campo ? [...await prosaRelatosCana(filtroC, a.U), ...prosaRelatos('cana', r => noP(r) && r.grupo !== 'cana')] : [];
@@ -2596,8 +2632,8 @@ async function gerarPDF(ini, fim, sel, opts) {
     if (opts.clima && (a.txtTempo || a.R)) { h2('O tempo e a água no solo'); txt(a.txtTempo); txt(a.agua?.txt);
       if (a.R) graficoRestricaoPDF(doc, a, ctx); destaque(a.agua?.efeito); }
     if (!a.cana && a.txtFrente) { h2('O que vem pela frente'); txt(a.txtFrente); }
-    if (opts.campo && (a.prosa.length || a.rels.length)) { h2('Levantamento de campo'); a.prosa.forEach(p => txt(p));
-      if (!a.prosa.length && a.rels.length) txt(`${a.rels.length === 1 ? 'A cultura foi citada em uma viagem a campo' : `A cultura foi citada em ${a.rels.length} viagens a campo`} no período, sem informações quantitativas.`); }
+    if (opts.campo && a.prosa.length) { h2('Levantamento de campo'); a.prosa.forEach(p => txt(p));
+    }
   }
   if (outras.length) { novaPag(); doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...VERDE); doc.text('RELATÓRIOS DE VIAGEM', M, y); y += 8; h1('Outras culturas no campo');
     linhaSub('O que as viagens a campo do período mostraram sobre outras culturas.');
