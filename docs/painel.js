@@ -914,7 +914,7 @@ function analisarRelato(rel, nomesMun) {
       if ((m = n.match(/ate\s+(\d{1,2})\s+de\s+([a-z]+)(?:\s+de\s+(\d{4}))?/)) || (m = n.match(/ate\s+()([a-z]+)\s+de\s+(\d{4})/))) {
         const mes = MESES.indexOf(m[2].slice(0, 3)); if (mes >= 0 && /plant|semead|semeadura|conclu|estend|janela/.test(n)) { let ano = +(m[3] || rel.data.getFullYear()); const d = new Date(ano, mes, +(m[1] || 28), 12); if (!m[3] && d < addD(rel.data, -30)) d.setFullYear(ano + 1); add('prazo', {data: d}); } }
       // cana e bioenergia: colheita, qualidade, mix, variedades, preços, etanol de milho, biomassa e sorgo
-      if (rel.grupo === 'cana') {
+      if (rel.grupo === 'cana' || cids.includes('cana') || (rel.cults.has('cana') && !cids.some(c => c !== 'cana')) || /\busina|moagem|etanol de milho|canavia/.test(n)) {
         if ((m = n.match(/(\d{1,3})\s*% da area (?:ja )?(?:foi |havia sido |esta |estava )?colhid/))) add('colheita', {pct: +m[1]});
         if ((m = n.match(/(metade|\d{1,3}\s*%) da area (?:ja )?deveria ter sido colhid/))) add('colheitaEsperada', {pct: /metade/.test(m[1]) ? 50 : parseFloat(m[1])});
         if (/colheita/.test(n) && (m = n.match(/atrasad\w*[^.]{0,40}?(\d{1,2})\s*pontos? percentuais/))) add('atrasoColheita', {pp: +m[1]});
@@ -2118,11 +2118,13 @@ async function carregarUsinas(lista) {
 const CATS_ESCRITAS = new Set(['plantio', 'atraso', 'paralisacao', 'replantio', 'conversao', 'area', 'clima', 'pragas', 'estadio', 'prazo', 'credito', 'custo', 'preco', 'produtividade',
   'colheita', 'colheitaEsperada', 'atrasoColheita', 'climaMes', 'atrImpacto', 'variedades', 'tch', 'mix', 'precoSent', 'milhoCompra', 'milhoContrato', 'milhoOrigem', 'siloBag', 'estoque', 'cavaco', 'sorgoPct']);
 const PALAVRAS_INFO = /produtiv|colheit|plantio|semeadura|chuva|estiagem|seca|preço|preco|custo|área|qualidade|praga|doença|doenca|mercado|demanda|estoque|investiment|usina|export|crédito|credito|tendênc|expectativa|redução|reducao|aumento|queda|alta |atras|adiant|perda|dificuldade|desafio|risco|preocupa|cultivar|variedade|insumo|fertiliz|diesel|frete|armazen|comercializ|contrato|rentabil|margem|clima|geada|irriga|manejo|tecnologia|mecaniza/gi;
+const ehRelCana = r => r.grupo === 'cana' || (r.grupo !== 'graos' && (r.cults.has('cana') || (r.fatos || []).some(f => f.cid === 'cana' || ['colheita', 'colheitaEsperada', 'atrasoColheita', 'atrImpacto', 'tch', 'variedades', 'milhoCompra', 'milhoContrato', 'siloBag', 'estoque', 'cavaco', 'sorgoPct'].includes(f.cat))));
+const KW_CANA = ['cana', 'canavia', 'usina', 'moagem', 'etanol', 'acucar', 'atr', 'soqueira', 'colheita mecaniz', 'vinhaca', 'bagaco'];
 const CATS_CANA = new Set(['colheita', 'colheitaEsperada', 'atrasoColheita', 'atrImpacto', 'pragas', 'variedades', 'tch', 'mix', 'precoSent', 'milhoCompra', 'milhoContrato', 'milhoOrigem', 'siloBag', 'estoque', 'cavaco', 'sorgoPct']);
 function trechosRelevantes(rel, {cid, jaEscrito = '', max = 4} = {}) {
   const cats = rel.grupo === 'cana' ? CATS_CANA : CATS_ESCRITAS, usadas = (rel.fatos || []).filter(f => cats.has(f.cat)).map(f => norm(f.frase).slice(0, 60));
   const numsJa = new Set((norm(jaEscrito).match(/\d+(?:[.,]\d+)?/g) || []));
-  const ps = cid && rel.grupo !== 'cana' ? (PALAVRAS_CULT[cid] || []) : null, palavras = t => new Set(norm(t).match(/[a-z]{5,}/g) || []), ja = palavras(jaEscrito);
+  const ps = cid && rel.grupo !== 'cana' ? (cid === 'cana' ? KW_CANA : (PALAVRAS_CULT[cid] || [])) : null, palavras = t => new Set(norm(t).match(/[a-z]{5,}/g) || []), ja = palavras(jaEscrito);
   let secao = null; const fr = [];
   for (const linha of rel.texto.split(/\n+/).map(x => x.trim()).filter(Boolean)) { const sc = cidSecao(linha); if (sc) { secao = sc; continue; }
     for (const f of linha.split(/(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÂÊÔÃÕÇ])/)) fr.push({f: f.trim(), secao}); }
@@ -2149,7 +2151,7 @@ async function prosaRelatosCana(filtro, R) {
   // regras: o relatório traz o que é novo; as planilhas (safra passada) e os mapas só entram para confirmar,
   // dar escala ou explicar uma diferença, sem repetir números já apresentados nas seções anteriores
   const out = [];
-  for (const rel of RELATOS.filter(r => r.grupo === 'cana' && (!filtro || filtro(r)))) {
+  for (const rel of RELATOS.filter(r => ehRelCana(r) && (!filtro || filtro(r)))) {
     const fs = rel.fatos, um = k => fs.filter(f => f.cat === k), um1 = k => um(k)[0];
     const rot = [...new Set(fs.filter(f => f.tipoEsc === 'regiao').flatMap(f => f.escopo))], escp = rot.length ? rot : [...rel.muns];
     const tn = norm(rel.texto), mq = tn.match(/(primeira|segunda|terceira|quarta|ultima) semana de ([a-z]+)/), mE = /entre os dias (\d{1,2}) e (\d{1,2}) de ([a-zç]+)/i.exec(rel.texto);
@@ -2157,7 +2159,7 @@ async function prosaRelatosCana(filtro, R) {
     const mS = rel.texto.match(/safra[^.\n]{0,40}?(20\d{2})\s*\/\s*(20\d{2}|\d{2})/i), safraRel = mS ? `${mS[1]}/${mS[2].slice(-2)}` : null;
     const usR = R ? R.usinas.filter(u => u.cd && escp.includes(u.cd) && u.temCanaAlgum) : [], outraSafra = R && safraRel && safraRel !== R.safra;
     const passada = outraSafra ? 'na safra passada' : 'na mesma safra', passadaDa = outraSafra ? 'da safra passada' : 'da mesma safra';
-    const p1 = [`${quando}, ${vr('visitaUsina', ['a equipe visitou usinas de açúcar e etanol em', 'o levantamento passou pelas usinas de', 'a equipe esteve nas usinas de'])} ${lista(escp.map(nmMun).filter(Boolean))}${safraRel ? `, no levantamento da safra ${safraRel}` : ''}.${outraSafra ? ` Como as planilhas mais recentes das usinas são da safra ${R.safra}, elas servem aqui apenas como referência do que é habitual para essas unidades.` : ''}`];
+    const p1 = [`${quando}, ${/usina/.test(tn) ? vr('visitaUsina', ['a equipe visitou usinas de açúcar e etanol em', 'o levantamento passou pelas usinas de', 'a equipe esteve nas usinas de']) : vr('visitaCana', ['a equipe percorreu áreas de cana em', 'o levantamento de cana passou por'])} ${lista(escp.map(nmMun).filter(Boolean))}${safraRel ? `, no levantamento da safra ${safraRel}` : ''}.${outraSafra ? ` Como as planilhas mais recentes das usinas são da safra ${R.safra}, elas servem aqui apenas como referência do que é habitual para essas unidades.` : ''}`];
     // colheita: relato × calendário das mesmas usinas
     const co = um1('colheita'), ce = um1('colheitaEsperada'), ac = um1('atrasoColheita'), cm = um1('climaMes');
     if (co) { let t = `A colheita estava ${ac || (ce && ce.pct > co.pct) ? 'atrasada' : 'em andamento'}: ${n0(co.pct)}% da área havia sido colhida${ce ? `, quando o normal para a época seria ${ce.pct === 50 ? 'cerca de metade' : `${n0(ce.pct)}%`}, segundo as usinas` : ''}${cm?.acima ? `, por causa das chuvas acima da média de ${MESES_EXT[cm.mes]}` : ''}.`;
@@ -2207,7 +2209,7 @@ async function prosaRelatosCana(filtro, R) {
     if (cv) { const eu = soloClasse('Eucalipto', null)?.area; p4.push(`A principal fonte de energia dessas usinas é o cavaco de madeira${cv.celulose ? ', o que as coloca em disputa por madeira com as novas fábricas de celulose' : ''}${eu ? `; o estado tem ${haTxt(eu)} de eucalipto mapeados, base para os dois usos` : ''}. Mesmo assim, as usinas veem o cenário como promissor e sinalizam novos investimentos.`); }
     if (so) { const sa2 = soloClasse('Sorgo', null)?.area; p4.push(`O sorgo entra no máximo com ${so.pct}% do volume, e só nas usinas mais novas, por exigir adaptações nos equipamentos. A expansão do sorgo no estado${sa2 ? ` (${haTxt(sa2)} mapeados na segunda safra de 2025)` : ''} responde mais à janela de plantio do produtor que à demanda das usinas.`); }
     const novos = [p1, p2, p3, p4].filter(p => p.length).map(p => p.join(' '));
-    const q = paragrafoQualitativo(trechosRelevantes(rel, {jaEscrito: novos.join(' '), max: novos.length > 2 ? 3 : 8}), novos.length > 1);
+    const q = paragrafoQualitativo(trechosRelevantes(rel, {cid: 'cana', jaEscrito: novos.join(' '), max: novos.length > 2 ? 3 : 8}), novos.length > 1);
     if (novos.length <= 1 && !q) continue; out.push(...novos); if (q) out.push(q);
   }
   return out;
@@ -2493,11 +2495,11 @@ async function analisePDFCana(ini, fim, dias, opts) {
     if (a.serie.length) { const p = a.serie.reduce((t, x) => t + x.p, 0), e = a.serie.reduce((t, x) => t + x.e, 0); a.chuvaTot = p; a.txtTempo = `${historiaTempo(a.serie)} No balanço do período, choveu ${n0(p)} mm nos canaviais, ${p > e * 1.15 ? 'mais do que' : p < e * .85 ? 'menos do que' : 'praticamente o mesmo que'} o solo e as plantas perderam por evaporação (${n0(e)} mm).`; } }
   // relatos de cana: os do período ou, se não houver, os dos últimos seis meses (o levantamento de cana é menos frequente)
   const noP = r => r.data >= ini && r.data <= addD(fim, 1), recente = r => r.data >= addD(fim < HOJE ? fim : HOJE, -200) && r.data <= addD(fim, 1);
-  const relCana = RELATOS.filter(r => r.grupo === 'cana'), ultimoC = relCana.filter(r => r.data <= addD(fim, 1) && r.data >= addD(fim, -365)).sort((p, q) => q.data - p.data)[0];
+  const relCana = RELATOS.filter(ehRelCana), ultimoC = relCana.filter(r => r.data <= addD(fim, 1) && r.data >= addD(fim, -365)).sort((p, q) => q.data - p.data)[0];
   const filtroC = relCana.some(noP) ? noP : relCana.some(recente) ? recente : (r => r === ultimoC);
-  a.rels = RELATOS.filter(r => r.cults.has('cana') && (r.grupo === 'cana' ? filtroC(r) : noP(r)));
+  a.rels = relCana.filter(filtroC);
   a.U = USINAS?.R || null; a.UT = a.U?.textos || null; a.Uav = USINAS?.avisos || [];
-  a.prosa = opts.campo ? [...await prosaRelatosCana(filtroC, a.U), ...prosaRelatos('cana', r => noP(r) && r.grupo !== 'cana')] : [];
+  a.prosa = opts.campo ? await prosaRelatosCana(filtroC, a.U) : [];
   a.sc = soloCultura('cana', null); a.rc = opts.clima ? resumoClima(dias, pesos) : null;
   const hoje = a.R?.filter(x => !x.prev && x.r != null).at(-1);
   const U = a.U; let mU = '';
