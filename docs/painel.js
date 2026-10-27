@@ -793,6 +793,7 @@ async function extrairTexto(a) {
   const f = await a.obter(), ext = f.name.toLowerCase().split('.').pop();
   if (ext === 'txt' || ext === 'md') return await f.text();
   if (ext === 'docx') { await carregarScript(LIBS.mammoth); return (await mammoth.extractRawText({arrayBuffer: await f.arrayBuffer()})).value; }
+  if (ext === 'odt') return await textoODT(await f.arrayBuffer());
   if (ext === 'pdf') {
     await carregarScript(LIBS.pdfjs); pdfjsLib.GlobalWorkerOptions.workerSrc = LIBS.pdfjsWorker;
     const pdf = await pdfjsLib.getDocument({data: await f.arrayBuffer()}).promise; let t = '';
@@ -801,12 +802,29 @@ async function extrairTexto(a) {
   }
   return '';
 }
+// .odt (LibreOffice): é um zip; lê o content.xml descompactando com o próprio navegador (DecompressionStream)
+async function textoODT(buf) {
+  const v = new DataView(buf), u8 = new Uint8Array(buf); let e = -1;
+  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 66000); i--) if (v.getUint32(i, true) === 0x06054b50) { e = i; break; }
+  if (e < 0) return '';
+  let p = v.getUint32(e + 16, true); const n = v.getUint16(e + 10, true);
+  for (let k = 0; k < n; k++) { const met = v.getUint16(p + 10, true), tam = v.getUint32(p + 20, true), ln = v.getUint16(p + 28, true), lx = v.getUint16(p + 30, true), lc = v.getUint16(p + 32, true), off = v.getUint32(p + 42, true);
+    const nome = new TextDecoder().decode(u8.subarray(p + 46, p + 46 + ln)); p += 46 + ln + lx + lc;
+    if (nome !== 'content.xml') continue;
+    const ini = off + 30 + v.getUint16(off + 26, true) + v.getUint16(off + 28, true), dados = u8.subarray(ini, ini + tam);
+    const bytes = met === 0 ? dados : new Uint8Array(await new Response(new Blob([dados]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+    const xml = new TextDecoder().decode(bytes).replace(/<text:tab\/>/g, ' ').replace(/<text:line-break\/>/g, '\n').replace(/<text:s(?: text:c="(\d+)")?\/>/g, (x, c) => ' '.repeat(+c || 1)).replace(/<\/text:(p|h)>/g, '\n').replace(/<\/table:table-cell>/g, ' | ').replace(/<[^>]+>/g, '');
+    const d = document.createElement('textarea'); d.innerHTML = xml; return d.value; }
+  return '';
+}
 function dataDoRelato(nome, texto, f) {
   let m = nome.match(/(20\d{2})[-_.](\d{2})[-_.](\d{2})/); if (m) return new Date(+m[1], m[2] - 1, +m[3], 12);
   m = nome.match(/(\d{2})[-_.](\d{2})[-_.](20\d{2})/); if (m) return new Date(+m[3], m[2] - 1, +m[1], 12);
   m = texto.slice(0, 600).match(/(\d{1,2})\/(\d{1,2})\/(20\d{2})/); if (m) return new Date(+m[3], m[2] - 1, +m[1], 12);
   // "entre os dias 19 e 23 de outubro", "de 19 a 23 de outubro de 2026", "23 de outubro de 2026": vale o último dia citado
   const t = norm(texto.slice(0, 1500)), ano0 = new Date(f.lastModified).getFullYear();
+  m = t.match(/(primeira|segunda|terceira|quarta|ultima) semana de ([a-z]+)(?:\s+de\s+(\d{4}))?/);
+  if (m) { const mes = MESES.indexOf(m[2].slice(0, 3)); if (mes >= 0) { const dia = {primeira: 7, segunda: 14, terceira: 21, quarta: 28, ultima: 28}[m[1]]; let d = new Date(+(m[3] || ano0), mes, dia, 12); if (d > addD(new Date(f.lastModified), 2)) d = new Date(d.getFullYear() - 1, mes, dia, 12); return d; } }
   m = t.match(/(\d{1,2})\s+(?:e|a|ate)\s+(\d{1,2})\s+de\s+([a-z]+)(?:\s+de\s+(\d{4}))?/) || t.match(/(\d{1,2})()\s+de\s+([a-z]+)(?:\s+de\s+(\d{4}))?/);
   if (m) { const mes = MESES.indexOf(m[3].slice(0, 3)); if (mes >= 0) { const d = new Date(+(m[4] || ano0), mes, +(m[2] || m[1]), 12); if (d <= addD(new Date(f.lastModified), 2)) return d; } }
   return new Date(f.lastModified);
@@ -845,9 +863,10 @@ function numBR(t) {
 }
 const PRAGAS = [['lesma', 'lesmas'], ['caramujo', 'caramujos'], ['percevejo', 'percevejos'], ['lagarta', 'lagartas'], ['helicoverpa', 'Helicoverpa'], ['mosca-branca', 'mosca-branca'], ['mosca branca', 'mosca-branca'],
   ['cigarrinha', 'cigarrinha'], ['ferrugem', 'ferrugem'], ['antracnose', 'antracnose'], ['mofo branco', 'mofo-branco'], ['nematoide', 'nematoides'], ['buva', 'buva'], ['capim-amargoso', 'capim-amargoso'],
-  ['capim amargoso', 'capim-amargoso'], ['plantas daninhas', 'plantas daninhas'], ['tripes', 'tripes'], ['acaro', 'ácaros'], ['pulgao', 'pulgões'], ['cupim', 'cupins'], ['brusone', 'brusone'], ['mancha-alvo', 'mancha-alvo'], ['mancha alvo', 'mancha-alvo'], ['enfezamento', 'enfezamento']];
+  ['capim amargoso', 'capim-amargoso'], ['plantas daninhas', 'plantas daninhas'], ['tripes', 'tripes'], ['acaro', 'ácaros'], ['pulgao', 'pulgões'], ['cupim', 'cupins'], ['brusone', 'brusone'], ['mancha-alvo', 'mancha-alvo'], ['mancha alvo', 'mancha-alvo'], ['enfezamento', 'enfezamento'],
+  ['sphenophorus', 'Sphenophorus (bicudo-da-cana)'], ['bicudo', 'Sphenophorus (bicudo-da-cana)'], ['estria vermelha', 'estria-vermelha'], ['isoporiza', 'isoporização'], ['broca', 'broca-da-cana'], ['carvao', 'carvão'], ['podridao', 'podridões']];
 const CLIMA_RE = {
-  excesso: /excesso de chuva|chuvas? (recorrente|frequente|intensa|continua|persistente)|elevado volume de chuva|muita chuva|chuva em excesso|encharcad|alagad|solo muito umido|umidade elevada/,
+  excesso: /excesso de chuva|chuvas? acima da media|chuvas? fora de epoca|chuvas? (recorrente|frequente|intensa|continua|persistente)|elevado volume de chuva|muita chuva|chuva em excesso|encharcad|alagad|solo muito umido|umidade elevada/,
   falta: /falta de chuva|estiagem|veranico|seca\b|deficit hidrico|chuva(s)? (escassa|irregular|abaixo)|baixa umidade do solo|restricao hidrica/,
   geada: /geada/, granizo: /granizo/, radiacao: /(baixa|pouca|reduzida) (incidencia de )?radiacao|nebulosidade|dias nublados|tempo nublado/, calor: /altas temperaturas|calor excessivo|temperaturas elevadas/};
 const ROT_CLIMA = {excesso: 'excesso de chuva', falta: 'falta de chuva / estiagem', geada: 'geada', granizo: 'granizo', radiacao: 'pouca luz (nebulosidade)', calor: 'calor excessivo'};
@@ -866,7 +885,7 @@ function analisarRelato(rel, nomesMun) {
     const sec = cidSecao(linha); if (sec) { cidAtual = sec; continue; }
     for (const frase of linha.split(/(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÂÊÔÃÕÇ])/)) {
       const n = norm(frase), ms = munsDe(frase), escopo = ms.length ? ms : regiao, tipoEsc = ms.length ? 'mun' : 'regiao';
-      const cids = cidAtual ? [cidAtual] : Object.entries(PALAVRAS_CULT).filter(([, ps]) => ps.some(p => n.includes(p))).map(([k]) => k);
+      const cids = rel.grupo === 'cana' ? ['cana'] : cidAtual ? [cidAtual] : Object.entries(PALAVRAS_CULT).filter(([, ps]) => ps.some(p => n.includes(p))).map(([k]) => k);
       if (rel.grupo === 'cana' && !cids.includes('cana')) cids.push('cana');
       const add = (cat, extra) => { for (const cid of (cids.length ? cids : [null])) fatos.push({cid, cat, escopo, tipoEsc, frase: frase.length > 300 ? frase.slice(0, 297) + '…' : frase, rel, ...extra}); };
       let m;
@@ -894,7 +913,26 @@ function analisarRelato(rel, nomesMun) {
       if ((m = n.match(/diesel[^.]{0,60}?r\$\s*([\d.,]+)/))) add('diesel', {valor: numBR(m[1])});
       if ((m = n.match(/ate\s+(\d{1,2})\s+de\s+([a-z]+)(?:\s+de\s+(\d{4}))?/)) || (m = n.match(/ate\s+()([a-z]+)\s+de\s+(\d{4})/))) {
         const mes = MESES.indexOf(m[2].slice(0, 3)); if (mes >= 0 && /plant|semead|semeadura|conclu|estend|janela/.test(n)) { let ano = +(m[3] || rel.data.getFullYear()); const d = new Date(ano, mes, +(m[1] || 28), 12); if (!m[3] && d < addD(rel.data, -30)) d.setFullYear(ano + 1); add('prazo', {data: d}); } }
-      if (/cooperativ|revenda|credito|financiament|juros|garantia/.test(n)) add('credito', {});
+      // cana e bioenergia: colheita, qualidade, mix, variedades, preços, etanol de milho, biomassa e sorgo
+      if (rel.grupo === 'cana') {
+        if ((m = n.match(/(\d{1,3})\s*% da area (?:ja )?(?:foi |havia sido |esta |estava )?colhid/))) add('colheita', {pct: +m[1]});
+        if ((m = n.match(/(metade|\d{1,3}\s*%) da area (?:ja )?deveria ter sido colhid/))) add('colheitaEsperada', {pct: /metade/.test(m[1]) ? 50 : parseFloat(m[1])});
+        if (/colheita/.test(n) && (m = n.match(/atrasad\w*[^.]{0,40}?(\d{1,2})\s*pontos? percentuais/))) add('atrasoColheita', {pp: +m[1]});
+        if ((m = n.match(/(?:impacto|perda|reducao|queda)[^.]{0,30}?(\d{1,2})\s*% no atr/)) || (m = n.match(/\batr\b[^.]{0,40}(?:impacto|perda|reducao|queda)[^.]{0,20}?(\d{1,2})\s*%/))) add('atrImpacto', {pct: +m[1]});
+        if ((m = n.match(/produtividade media[^.]{0,50}?(\d{2,3}(?:[.,]\d+)?)\s*(?:toneladas por hectare|t\/ha)/))) add('tch', {v: numBR(m[1])});
+        if ((m = n.match(/(\d{1,2})\s*% para (?:o )?acucar/))) add('mix', {acucar: +m[1]});
+        if ((m = n.match(/(\d{1,3})\s*variedades/))) add('variedades', {n: +m[1]});
+        if (/preco/.test(n) && (m = n.match(/de ([a-z ]{4,40}?) para o acucar/))) { const e = n.match(/de ([a-z ]{4,40}?) para o etanol/); add('precoSent', {acucar: m[1].trim(), etanol: e ? e[1].trim() : null}); }
+        if ((m = n.match(/(\d{1,3})\s*% do volume necessario[^.]{0,60}?adquirid/))) add('milhoCompra', {pct: +m[1]});
+        if ((m = n.match(/contrato futuro[^.]{0,40}?(\d{1,3})\s*% a (\d{1,3})\s*%/))) add('milhoContrato', {min: +m[1], max: +m[2]});
+        if (/metade[^.]{0,40}produtores[^.]{0,60}cooperativas/.test(n)) add('milhoOrigem', {});
+        if ((m = n.match(/silo bag[^.]{0,80}?(\d{1,3})\s*%/))) add('siloBag', {pct: +m[1]});
+        if ((m = n.match(/estoque[^.]{0,80}?entre (\d{1,2}) e (\d{1,2}) meses/)) || (m = n.match(/estoque[^.]{0,80}?(\d{1,2})() meses/))) add('estoque', {min: +m[1], max: +(m[2] || m[1])});
+        if (/cavaco|biomassa de madeira|lenha/.test(n)) add('cavaco', {celulose: /celulose/.test(n)});
+        if ((m = n.match(/sorgo[^.]{0,40}?(?:no maximo |ate )?(\d{1,2})\s*% do volume/))) add('sorgoPct', {pct: +m[1]});
+        if ((m = n.match(/chuvas?[^.]{0,50}?(?:em|de) (janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)/))) add('climaMes', {mes: MESES.indexOf(m[1].slice(0, 3)), acima: /acima|excesso|fora de epoca/.test(n)});
+      }
+      if (/cooperativ|revenda|credito|financiament|juros|garantia/.test(n) && rel.grupo !== 'cana') add('credito', {});
       if (/precoce|semiprecoce|ciclo (curto|medio|tardio)|grupo de maturacao/.test(n)) add('ciclo', {});
       if (/preco|comprador|comercializa|rentabilidade|margem/.test(n) && !fatos.some(f => f.frase === frase && f.cat === 'preco')) add('mercado', {});
     }
@@ -1020,7 +1058,8 @@ async function processarArquivos(lista, nomePasta) {
   const planilhas = lista.filter(a => ['xlsx', 'xls'].includes(ext(a)) && /plantio|evolu/i.test(norm(a.caminho)) && !/modelo|template/i.test(norm(a.caminho.split('/').pop())) && !tmp(a));
   const fotos = lista.filter(a => ['jpg', 'jpeg', 'png', 'webp'].includes(ext(a)) && !tmp(a));
   const heic = lista.filter(a => ext(a) === 'heic').length;
-  const relatos = lista.filter(a => ['docx', 'txt', 'md', 'pdf'].includes(ext(a)) && !tmp(a));
+  const relatos = lista.filter(a => ['docx', 'odt', 'txt', 'md', 'pdf'].includes(ext(a)) && !tmp(a));
+  const plUsinas = lista.filter(a => ['xlsx', 'xlsm', 'xls'].includes(ext(a)) && /usina/.test(norm(a.caminho)) && !/plantio|evolu/.test(norm(a.caminho.split('/').pop())) && !tmp(a));
   const linhas = [`<b>${esc(nomePasta)}</b> · ${lista.length} arquivos`];
   // todas as planilhas (uma por safra); se houver duas da mesma safra, vale a salva por último
   PL = {}; const origem = {};
@@ -1037,6 +1076,7 @@ async function processarArquivos(lista, nomePasta) {
   $('bt-pasta').textContent = 'Recarregar pasta';
   carregarFotos(fotos);
   carregarRelatos(relatos);
+  carregarUsinas(plUsinas);
 }
 $('bt-pasta').onclick = async () => {
   const st = $('st-pasta');
@@ -1682,12 +1722,18 @@ const METODOLOGIA = `
 <p>A ficha do estado agrega os municípios com dados: médias ponderadas pela área informada, distribuição por estádio, calendário das fases críticas a partir da curva estadual de semeadura e indicadores por região imediata. O clima é a média diária dos municípios com a cultura, ponderada pela área. A análise estadual roda o balanço hídrico de cada município, informa a fração da área com restrição hídrica (Ks &lt; 1) hoje e na previsão, e ordena os municípios pela pontuação de prioridade de vistoria.</p>
 <p><b>Seleção de região.</b> Com a tecla Ctrl (Cmd no Mac) pressionada, cada clique no mapa soma ou retira um município da seleção. A ficha, a análise e a janela de clima passam a valer para o conjunto escolhido, com as mesmas regras da visão estadual (médias ponderadas pela área da cultura nos municípios selecionados, solos somados nesses municípios, relatos e fotos que citam algum deles). Um clique sem Ctrl volta à análise de um único município; fechar a ficha limpa a seleção.</p>
 <h3>9. Relatos de viagem</h3>
-<p>São lidos arquivos .docx, .pdf, .txt e .md da pasta de relatos. A subpasta define o grupo: relatos dentro de uma subpasta “Cana” são atribuídos à cana-de-açúcar; relatos dentro de “Grãos” (que inclui algodão) têm as culturas identificadas por palavras-chave, sem contar citações de cana. Fora dessas subpastas, todas as culturas são identificadas por palavras-chave. A data vem do nome do arquivo (AAAA-MM-DD), da primeira data no texto ou da data de modificação. Os municípios citados são identificados pelo nome (com inicial maiúscula, ignorando acentos) e as culturas por palavras-chave. Cada relato é lido por regras que extraem fatos: percentuais de plantio, atraso e dias de operações paradas, replantio (ha), mudança de uso (por exemplo, soja convertida em eucalipto), área da safra atual e anterior, clima citado (excesso ou falta de chuva, nebulosidade, calor, frio), pragas e doenças com a intensidade, estádios (V4, R1…), prazo de plantio, preço, custo de produção, produtividade, diesel e crédito. O escopo de cada fato é o município citado na mesma frase ou, sem citação, o conjunto de municípios do roteiro da viagem.</p>
+<p>São lidos arquivos .docx, .odt, .pdf, .txt e .md da pasta de relatos. A subpasta define o grupo: relatos dentro de uma subpasta “Cana” são atribuídos à cana-de-açúcar; relatos dentro de “Grãos” (que inclui algodão) têm as culturas identificadas por palavras-chave, sem contar citações de cana. Fora dessas subpastas, todas as culturas são identificadas por palavras-chave. A data vem do nome do arquivo (AAAA-MM-DD), da primeira data no texto ou da data de modificação. Os municípios citados são identificados pelo nome (com inicial maiúscula, ignorando acentos) e as culturas por palavras-chave. Cada relato é lido por regras que extraem fatos: percentuais de plantio, atraso e dias de operações paradas, replantio (ha), mudança de uso (por exemplo, soja convertida em eucalipto), área da safra atual e anterior, clima citado (excesso ou falta de chuva, nebulosidade, calor, frio), pragas e doenças com a intensidade, estádios (V4, R1…), prazo de plantio, preço, custo de produção, produtividade, diesel e crédito. O escopo de cada fato é o município citado na mesma frase ou, sem citação, o conjunto de municípios do roteiro da viagem.</p>
 <p><b>Cruzamento com o painel.</b> Os fatos são comparados com as demais bases: o percentual relatado com a planilha da equipe na semana do relato (diferença de até 12 p.p. = coerente); o atraso relatado com a posição da região em relação ao estado; o ritmo das duas últimas semanas da planilha com o prazo citado (data provável de 95% plantado); os estádios relatados com a projeção fenológica; o replantio como % da área da cultura no roteiro; o clima relatado com a chuva, a ET0, os dias com chuva e a maior sequência chuvosa dos 30 dias anteriores (modelo); pragas de ambiente úmido com períodos chuvosos; mudanças de uso com os mapas de uso do solo; a área relatada com a da planilha (diferença de até 15% = coerente); e custo, preço e produtividade citados para calcular o ponto de equilíbrio (kg/ha), a margem e o preço de equilíbrio. Cada cruzamento recebe uma marca (coerente, diverge, atenção, novo) para orientar a conferência. É leitura automática: números e termos fora dos padrões previstos não são captados, e o texto original deve ser consultado.</p>
 <h3>10. Análise agronômica automática e prioridade de vistoria</h3>
 <p>O texto da análise é montado por regras explícitas a partir dos itens acima. A prioridade de vistoria soma pontos para: área em fases críticas nas próximas três semanas (≥ 30%), restrição hídrica atual (Ks &lt; 1), calor ≥ 35 °C ou déficit hídrico previsto durante fases críticas, risco de geada em culturas sensíveis, chuva elevada na maturação ou colheita, semeadura atrasada em relação ao estado e ausência de informação de campo nos últimos 30 dias (Alta ≥ 5 pontos; Média 3–4; Baixa ≤ 2).</p>
 <h3>11. Resumo da safra (PDF)</h3>
 <p>O resumo é escrito em texto corrido, em ordem cronológica. A primeira página traz o panorama do período (o tempo nas áreas agrícolas e uma frase por cultura) e os números principais. Cada cultura conta como andou a semeadura (início, semanas de maior e menor avanço com a chuva de cada semana, situação na última atualização da planilha, comparação com a safra anterior quando a planilha a tiver, diferenças entre regiões e projeção pelo ritmo recente), o tempo por quinzena e a água no solo, o que vem pela frente (fases e previsão) e o que o campo contou (relatórios de viagem lidos e cruzados como no item 9). Dois gráficos acompanham o texto: a semeadura semana a semana (com a chuva de cada semana) e a falta de água no período, que mostra, dia a dia, a parcela da área com lavoura em campo em restrição leve, moderada ou severa pelo balanço hídrico FAO-56 (com 30 dias anteriores para estabilizar o solo e a previsão nos dias seguintes), junto com a parcela em fase crítica. O comentário sobre o efeito na safra considera em que fase a falta de água ocorreu: no início do ciclo o efeito tende a ser pequeno; em florescimento e enchimento de grãos pode reduzir a produtividade. As tabelas de apoio (regiões, solos, indicadores de clima, municípios com mais falta de água, relatórios e dados por município) ficam no anexo. Culturas citadas nos relatórios e não incluídas no resumo ganham uma seção própria.</p>
+<h3>11a. Planilhas das usinas (cana e etanol de milho)</h3>
+<p>As planilhas da pasta “03_Planilha_Usinas” seguem o questionário da Conab para a safra sucroenergética, com uma aba por usina. O painel lê cada aba pelos rótulos do formulário: área e produtividade por idade do canavial (cana própria e de fornecedores), cana moída, ATR, área plantada, rotação nas áreas de reforma, chuva mensal (média histórica e ocorrida), calendário de colheita, transporte, capacidade industrial, período de funcionamento, produção de açúcar, etanol anidro e hidratado, etanol e DDG de milho e energia elétrica, para a safra anterior e para cada avaliação da safra atual. Nome do responsável, telefone, e-mail, CNPJ e endereço não são lidos. A safra vale para o arquivo inteiro: é tirada do nome do arquivo (por exemplo “25_26”) ou, sem isso, da safra mais citada nos questionários, porque o campo costuma ficar desatualizado.</p>
+<p><b>Consistência.</b> Antes de somar, o painel corrige unidades evidentemente trocadas (moagem, milho, DDG ou transporte informados em toneladas em vez de mil toneladas, reconhecidos por valores mil vezes maiores que os das outras avaliações da mesma usina ou que a moagem), trata como não preenchida uma avaliação com moagem abaixo de 30% das demais da mesma usina ou com área que cai mais de 40% sem a moagem acompanhar e, quando um bloco não foi preenchido na avaliação mais recente, usa a anterior. Todos os ajustes ficam listados no anexo do resumo, pelo código do questionário.</p>
+<p><b>Indicadores.</b> Estimativa atual = avaliação mais recente preenchida por cada usina. Comparações com a safra anterior e entre avaliações usam sempre o mesmo conjunto de usinas. Produtividade média ponderada pela área; ATR ponderado pela cana moída. Mix em ATR pelos fatores do Consecana (1,0495 kg de ATR por kg de açúcar; 1,7651 e 1,6913 kg por litro de etanol anidro e hidratado). Idade do canavial pela área de cada corte; a necessidade de renovação de 15% a 20% ao ano corresponde a ciclos de cinco a seis cortes. Uso da capacidade = moagem ÷ (capacidade diária × dias de safra). A área equivalente do milho moído usa 90 sacas por hectare como referência, e as residências abastecidas pela energia vendida usam consumo de 160 kWh por mês, ambos apenas para dar escala aos números. As usinas são agrupadas em polos (Centro-Sul, Vale do Ivinhema, Norte e Bolsão) pela região imediata do município; dados de usinas individuais não aparecem no resumo.</p>
+<p><b>Cruzamentos.</b> A chuva informada pelas usinas é comparada à média histórica delas e à produtividade de cada polo; a área informada é comparada à do mapeamento de uso do solo; os relatórios de viagem de cana são confrontados com o calendário de colheita, o ATR, a produtividade e o mix das usinas dos municípios visitados, com a chuva do mês citado (histórico do painel) e com os mapas de solos, eucalipto, milho e sorgo. Relatórios de cana sem data no período do resumo entram se forem dos últimos seis meses.</p>
+<p><b>Coerência entre fontes.</b> Quando duas fontes não fecham, o resumo diz isso e explica o motivo provável, em vez de apresentar números contraditórios. A moagem e a tabela de área e produtividade são comparadas sobre as mesmas usinas; se área × produtividade se afastar mais de 5% da moagem, o texto aponta a diferença e usa a moagem como medida de volume. Relatórios de campo de uma safra mais nova que a das planilhas usam as planilhas só como referência do que é habitual. No atraso de colheita, o calendário planejado pelas próprias usinas é comparado à referência citada na visita, e o resumo apresenta a faixa entre as duas. Uma chuva citada no relatório e não confirmada pelo modelo é discutida pela frequência de dias com chuva e pela resolução do modelo; a observação de campo é mantida, com a ressalva. Valores extremos, como uma perda de ATR que levaria a um nível historicamente baixo, são tratados como pior cenário. Um mix mais açucareiro em meio a insatisfação com o preço do açúcar é sinalizado como provável diferença de base (volume ou ATR). A seção “Levantamento de campo” traz o que o relatório acrescenta, sem repetir números já apresentados.</p>
 <h3>12. Limitações</h3>
 <ul><li>A projeção fenológica usa calendário médio, sem considerar temperatura (graus-dia), cultivar ou grupo de maturação.</li>
 <li>Os dados de clima por município são estimativas em um ponto e não captam a variabilidade da chuva dentro do município. A média de modelos suaviza chuvas intensas e localizadas.</li>
@@ -1706,10 +1752,10 @@ $('bt-resumo').onclick = () => {
     <div class="datas"><div><label for="pdf-ini">Início do período</label><input type="date" id="pdf-ini" class="campo" value="${dISO(ini)}"></div>
     <div><label for="pdf-fim">Fim do período</label><input type="date" id="pdf-fim" class="campo" value="${dISO(HOJE)}"></div></div>
     <label>Culturas (marque quantas quiser)</label>
-    <div class="lista">${itens.map(([s, n], i) => `<label><input type="checkbox" class="pdf-c" data-s="${esc(s)}" data-n="${esc(n)}" ${(n === CANA_SEL ? cultSel === CANA_SEL : s === safraSel && n === cultSel) ? 'checked' : ''}> ${n === CANA_SEL ? 'Cana-de-açúcar <span class="nota" style="margin:0">área mapeada, sem fenologia</span>' : `${esc(n)} <span class="nota" style="margin:0">${esc(s)}</span>`}</label>`).join('') || '<span class="nota">Nenhuma cultura com dados.</span>'}</div>
+    <div class="lista">${itens.map(([s, n], i) => `<label><input type="checkbox" class="pdf-c" data-s="${esc(s)}" data-n="${esc(n)}" ${(n === CANA_SEL ? cultSel === CANA_SEL : s === safraSel && n === cultSel) ? 'checked' : ''}> ${n === CANA_SEL ? `Cana-de-açúcar <span class="nota" style="margin:0">área mapeada${USINAS?.R ? ' e planilhas das usinas' : ''}</span>` : `${esc(n)} <span class="nota" style="margin:0">${esc(s)}</span>`}</label>`).join('') || '<span class="nota">Nenhuma cultura com dados.</span>'}</div>
     <div class="mini"><a id="pdf-todas">marcar todas</a><a id="pdf-nenhuma">desmarcar</a></div>
     <label>Incluir</label>
-    <div class="lista"><label><input type="checkbox" id="pdf-mun" checked> Tabela completa por município</label><label><input type="checkbox" id="pdf-clima" checked> Clima do período</label><label><input type="checkbox" id="pdf-campo" checked> Fotos e relatos do período</label></div>
+    <div class="lista"><label><input type="checkbox" id="pdf-mun" checked> Tabela completa por município</label><label><input type="checkbox" id="pdf-clima" checked> Clima do período</label><label><input type="checkbox" id="pdf-campo" checked> Relatos de campo do período</label></div>
     <button class="btn" id="pdf-gerar">Gerar PDF</button><div class="nota" id="pdf-st"></div></div>`);
   $('pdf-todas').onclick = () => document.querySelectorAll('.pdf-c').forEach(x => x.checked = true);
   $('pdf-nenhuma').onclick = () => document.querySelectorAll('.pdf-c').forEach(x => x.checked = false);
@@ -1752,6 +1798,429 @@ function resumoClima(dias, pesos) {   // pesos: {cd: área}
   agg.dias = ds.length; agg.ini = ds[0]; agg.fim = ds.at(-1); return agg;
 }
 // =====================================================================
+// PLANILHAS DAS USINAS (questionário Conab da safra sucroenergética)
+// Lê as abas de questionário (uma por usina), corrige unidades óbvias e marca o que falta.
+// Dados pessoais (responsável, telefone, e-mail, CNPJ, endereço) não são lidos.
+// =====================================================================
+const somaObj = o => Object.values(o || {}).reduce((t, v) => t + (v || 0), 0);
+const PER_US = ['ant', 'a1', 'a2', 'a3'], ROT_PER = {ant: 'safra anterior', a1: '1ª avaliação', a2: '2ª avaliação', a3: '3ª avaliação'};
+const CICLOS_US = [['r12', 'Cana de 12 meses', 'Renovação'], ['e12', null, 'Expansão'], ['r18', 'Cana de 18 meses', 'Renovação'], ['e18', null, 'Expansão'],
+  ['c2', '2º corte'], ['c3', '3º corte'], ['c4', '4º corte'], ['c5', '5º corte'], ['c6', '6º corte']];
+const POLO_RGI = {'Dourados': 'Centro-Sul', 'Ponta Porã': 'Centro-Sul', 'Campo Grande': 'Centro-Sul', 'Amambai': 'Centro-Sul', 'Jardim': 'Centro-Sul', 'Aquidauana - Anastácio': 'Centro-Sul',
+  'Nova Andradina': 'Vale do Ivinhema', 'Naviraí - Mundo Novo': 'Vale do Ivinhema', 'Coxim': 'Norte e Bolsão', 'Paranaíba - Chapadão do Sul - Cassilândia': 'Norte e Bolsão', 'Três Lagoas': 'Norte e Bolsão', 'Corumbá': 'Norte e Bolsão'};
+// fatores de conversão em ATR (Consecana): kg de ATR por kg de açúcar e por litro de etanol
+const ATR_ACUCAR = 1.0495, ATR_ANIDRO = 1.7651, ATR_HIDRATADO = 1.6913;
+function numUs(v) { if (v == null || v === '') return null; if (typeof v === 'number') return isFinite(v) ? v : null; if (v instanceof Date) return null;
+  const s = String(v).trim(); if (!s || /DIV|N\/A|#/.test(s)) return null; const t = /,\d{1,2}$/.test(s) ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, ''); const x = Number(t); return isFinite(x) ? x : null; }
+const txtUs = v => v == null ? '' : String(v).trim();
+const normUs = s => txtUs(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ');
+function lerQuestionario(A) {   // A: matriz da aba (linhas × colunas)
+  const acha = (re, c0 = 0) => { for (let r = 0; r < A.length; r++) for (let c = c0; c < (A[r] || []).length; c++) if (typeof A[r][c] === 'string' && re.test(normUs(A[r][c]))) return [r, c]; return null; };
+  const cel = (r, c) => (A[r] || [])[c];
+  const q = acha(/^01- n. questionario/); if (!q) return null;
+  const valDir = ([r, c]) => { for (let k = c + 1; k < c + 6; k++) if (txtUs(cel(r, k))) return cel(r, k); return null; };
+  const u = {cod: txtUs(valDir(q)), safra: txtUs(valDir(acha(/^02- ano/) || q)), periodos: {}};
+  const pm = acha(/^09- municipio/); u.municipio = pm ? txtUs(valDir(pm)) : '';
+  // perfil: "X" na célula à esquerda da opção
+  u.perfil = []; for (const [re, k] of [[/^usina$/, 'usina'], [/^usina flex/, 'flex'], [/^destilaria/, 'destilaria'], [/^usina de milho/, 'milho'], [/^usina mista/, 'mista']]) { const p = acha(re); if (p && /x/i.test(txtUs(cel(p[0], p[1] - 1)))) u.perfil.push(k); }
+  PER_US.forEach(k => u.periodos[k] = {area: {p: {}, f: {}}, tch: {p: {}, f: {}}});
+  // 15 — área e produtividade por idade do canavial (colunas própria/fornecedor de cada período)
+  const h = acha(/^15- area/);
+  if (h) { const hp = acha(/^propria$/, 0); const cols = []; if (hp) for (let c = hp[1]; c < hp[1] + 8; c++) cols.push(c);
+    let r = h[0] + 1, ciclo = null;
+    for (; r < Math.min(A.length, h[0] + 40); r++) { const a = normUs(cel(r, 2)), b = normUs(cel(r, 4));
+      if (/^16-/.test(a)) break;
+      if (a) ciclo = a;
+      const put = (key, campo, linha) => cols.forEach((c, i) => { const per = PER_US[i >> 1], pf = i % 2 ? 'f' : 'p', v = numUs(cel(linha, c)); if (v != null) u.periodos[per][campo][pf][key] = v; });
+      if (b && /^(renovacao|expansao|area)/.test(b) && ciclo) { const key = /12 meses/.test(ciclo) ? (/^exp/.test(b) ? 'e12' : 'r12') : /18 meses/.test(ciclo) ? (/^exp/.test(b) ? 'e18' : 'r18') : (/^(\d)/.exec(ciclo) || [])[1] ? 'c' + Math.min(6, +/^(\d)/.exec(ciclo)[1]) : null;
+        if (key) { put(key, 'area', r); put(key, 'tch', r + 1); } }
+      if (/^total de cana moida/.test(a)) put('moida', 'area', r);
+      if (/^atr/.test(a)) put('atr', 'area', r);
+      if (/^cana bisada/.test(a)) put('bisada', 'area', r); }
+    for (const k of PER_US) { const P = u.periodos[k]; for (const pf of ['p', 'f']) { P[pf === 'p' ? 'moidaP' : 'moidaF'] = P.area[pf].moida ?? null; P[pf === 'p' ? 'atrP' : 'atrF'] = P.area[pf].atr ?? null; P[pf === 'p' ? 'bisada' : '_b'] = P.area[pf].bisada ?? null; delete P.area[pf].moida; delete P.area[pf].atr; delete P.area[pf].bisada; } } }
+  // blocos de quatro períodos (Safra anterior, 1ª, 2ª, 3ª): rótulo do bloco, cabeçalho logo abaixo, linhas pelo rótulo na mesma coluna
+  const bloco = (re, linhas) => { const p = acha(re); if (!p) return; let hr = -1, cs = [];
+    for (let r = p[0] + 1; r <= p[0] + 3 && hr < 0; r++) for (let c = p[1]; c < p[1] + 8; c++) if (/^safra anterior/.test(normUs(cel(r, c)))) { hr = r; cs = [c, c + 1, c + 2, c + 3]; break; }
+    if (hr < 0) return;
+    for (let r = hr + 1; r < hr + 9; r++) { const lab = normUs(cel(r, p[1])); if (!lab) continue; for (const [rl, key] of linhas) if (rl.test(lab)) cs.forEach((c, i) => { const v = cel(r, c); u.periodos[PER_US[i]][key] = v instanceof Date ? v : numUs(v); }); } };
+  bloco(/^16- area de plantio/, [[/^renov/, 'plantioRenov'], [/^expan/, 'plantioExp']]);
+  bloco(/^17- areas ocupadas/, [[/^soja/, 'rotSoja'], [/^amendoim/, 'rotAmendoim'], [/^milho/, 'rotMilho'], [/^outros/, 'rotOutros']]);
+  bloco(/^19- numero de colhedoras/, [[/./, 'colhedoras']]);
+  bloco(/^22- cana a ser transportada/, [[/^ate 20/, 'tr20'], [/^de 20 a 40/, 'tr40'], [/^mais de 40/, 'trMais']]);
+  bloco(/^27- producao de bagaco/, [[/^producao/, 'bagaco']]);
+  bloco(/^23- capacidade industrial/, [[/^esmag/, 'capDia']]);
+  bloco(/^28- tancagem/, [[/^tancagem/, 'tancagem']]);
+  bloco(/^24- estimativa de esmagamento/, [[/^propria/, 'esmP'], [/^fornec/, 'esmF'], [/^outras/, 'esmSpot'], [/^total/, 'esmTot']]);
+  bloco(/^29- periodo de funcionamento/, [[/^data inicio/, 'ini'], [/^data encerr/, 'fim'], [/^dias corridos/, 'dias'], [/^eficiencia da moenda/, 'efMoenda'], [/^horas de operacao-moenda/, 'hMoenda']]);
+  bloco(/^25- estimativa de producao \(a partir da cana/, [[/^acucar/, 'acucar'], [/^etanol anidro/, 'anidro'], [/^etanol hidratado/, 'hidratado'], [/^etanol total/, 'etanol'], [/^mel/, 'mel']]);
+  bloco(/^30- geracao de energia/, [[/^capacidade/, 'capKw'], [/^previsao de geracao/, 'gerMwh'], [/^previsao de consumo/, 'consMwh'], [/^en\. elet/, 'vendaMwh']]);
+  bloco(/^26- estimativa de producao \(a partir do milho/, [[/^total de milho/, 'milho'], [/^etanol anidro/, 'anidroMilho'], [/^etanol hidratado/, 'hidratadoMilho'], [/^etanol total/, 'etanolMilho'], [/^ddg/, 'ddg']]);
+  // 18 — sistema de colheita (mil t): queimada/crua
+  const sc = acha(/^18- sistema de colheita/); if (sc) for (let r = sc[0] + 1; r < sc[0] + 6; r++) if (/^mecanico/.test(normUs(cel(r, sc[1])))) { u.mecQueim = numUs(cel(r, sc[1] + 1)); u.mecCrua = numUs(cel(r, sc[1] + 2)); } else if (/^manual/.test(normUs(cel(r, sc[1])))) { u.manQueim = numUs(cel(r, sc[1] + 1)); u.manCrua = numUs(cel(r, sc[1] + 2)); }
+  // 20 e 21 — chuva mensal (histórica e ocorrida) e calendário de colheita (ha por mês)
+  const mes = re => { const p = acha(re); if (!p) return null; const v = []; for (let c = 3; c < 15; c++) v.push(numUs(cel(p[0], c))); return v; };
+  u.chuvaHist = mes(/^media historica/); u.chuvaOcorr = mes(/^ocorrida/); u.calendario = mes(/^hectares/);
+  const coment = acha(/^31- condicoes/); u.comentario = coment ? [1, 2, 3, 4].map(k => txtUs(cel(coment[0] + k, 2))).filter(Boolean).join(' ') : '';
+  return u;
+}
+// ---------- consistência: unidades trocadas, períodos não preenchidos ----------
+function checarUsinas(US) {
+  const avisos = [];
+  const tem = (P, ks) => ks.some(k => (P[k] || 0) > 0);
+  for (const u of US) for (const k of PER_US) { const P = u.periodos[k], ref = Math.max(...PER_US.map(x => u.periodos[x].esmTot || 0).filter(v => v < 30000), 1);
+    // esmagamento e milho em mil t: valor mil vezes maior que o dos outros períodos -> estava em t
+    for (const c of ['esmTot', 'esmP', 'esmF', 'esmSpot']) if (P[c] > 30000) { P[c] /= 1000; avisos.push(`${u.cod}: ${c === 'esmTot' ? 'esmagamento total' : 'esmagamento'} da ${ROT_PER[k]} estava em toneladas (dividido por mil).`); }
+    if (P.milho > 10000) { P.milho /= 1000; avisos.push(`${u.cod}: milho moído da ${ROT_PER[k]} estava em toneladas (dividido por mil).`); }
+    if (P.ddg > 0 && P.milho > 0 && P.ddg > P.milho) { P.ddg /= 1000; avisos.push(`${u.cod}: DDG da ${ROT_PER[k]} estava em toneladas (dividido por mil).`); }
+    const tr = (P.tr20 || 0) + (P.tr40 || 0) + (P.trMais || 0); if (tr > 30000 && P.esmTot > 0 && tr / P.esmTot > 100) { for (const c of ['tr20', 'tr40', 'trMais']) if (P[c]) P[c] /= 1000; avisos.push(`${u.cod}: cana transportada da ${ROT_PER[k]} estava em toneladas (dividido por mil).`); }
+    if (P.bagaco > 0 && P.esmTot > 0 && P.bagaco > P.esmTot) { P.bagaco /= 1000; }
+    for (const c of ['gerMwh', 'consMwh', 'vendaMwh']) if (P[c] == null && u.periodos[k]._raw?.[c]) avisos.push(`${u.cod}: valor de energia ilegível na ${ROT_PER[k]}.`);
+    // período sem dado algum de produção = não preenchido (não é zero)
+    P.temCana = tem(P, ['esmTot']) || tem(P, ['moidaP', 'moidaF']); P.temProd = tem(P, ['acucar', 'etanol', 'anidro', 'hidratado']); P.temMilho = tem(P, ['milho', 'etanolMilho']); P.temEnergia = tem(P, ['gerMwh', 'vendaMwh']);
+    P.temArea = Object.values(P.area.p).some(v => v > 0) || Object.values(P.area.f).some(v => v > 0);
+    if (!P.etanol && (P.anidro || P.hidratado)) P.etanol = (P.anidro || 0) + (P.hidratado || 0);
+    if (!P.etanolMilho && (P.anidroMilho || P.hidratadoMilho)) P.etanolMilho = (P.anidroMilho || 0) + (P.hidratadoMilho || 0);
+    if (!P.esmTot && (P.esmP || P.esmF)) P.esmTot = (P.esmP || 0) + (P.esmF || 0) + (P.esmSpot || 0); }
+  // moagem muito abaixo das outras avaliações da mesma usina: avaliação incompleta
+  for (const u of US) { const vs = PER_US.map(k => u.periodos[k].esmTot || 0); for (let i = 0; i < 4; i++) { const out = vs.filter((v, j) => j !== i && v > 0).sort((a, b) => a - b); if (out.length < 2 || !vs[i]) continue; const med = out[Math.floor(out.length / 2)];
+    if (vs[i] < .3 * med) { u.periodos[PER_US[i]].temCana = false; avisos.push(`${u.cod}: moagem da ${ROT_PER[PER_US[i]]} (${Math.round(vs[i]).toLocaleString('pt-BR')} mil t) muito abaixo das demais avaliações; tratada como não preenchida.`); } } }
+  // área informada que despenca sem a moagem acompanhar: avaliação incompleta (usa a anterior)
+  const areaU = P => somaObj(P.area.p) + somaObj(P.area.f);
+  for (const u of US) for (let i = 2; i < PER_US.length; i++) { const P = u.periodos[PER_US[i]], Q = u.periodos[PER_US[i - 1]];
+    if (P.temArea && Q.temArea && areaU(P) < .6 * areaU(Q) && P.esmTot && Q.esmTot && Math.abs(P.esmTot / Q.esmTot - 1) < .15) { P.temArea = false; avisos.push(`${u.cod}: área da ${ROT_PER[PER_US[i]]} incompleta (${Math.round(areaU(P)).toLocaleString('pt-BR')} ha contra ${Math.round(areaU(Q)).toLocaleString('pt-BR')} ha antes, com moagem estável); usada a ${ROT_PER[PER_US[i - 1]]}.`); } }
+  // a estimativa "atual" de cada usina é a avaliação mais recente preenchida, bloco a bloco
+  const ultima = (u, flag) => [...PER_US].reverse().find(k => k !== 'ant' && u.periodos[k][flag]);
+  for (const u of US) { u.atual = {}; for (const f of ['temCana', 'temProd', 'temMilho', 'temEnergia', 'temArea']) u.atual[f] = ultima(u, f) || null;
+    const ult = PER_US.filter(k => k !== 'ant' && Object.keys(u.periodos[k]).some(x => x.startsWith('tem') && u.periodos[k][x])).at(-1);
+    for (const f of ['temCana', 'temProd', 'temMilho']) if (u.atual[f] && ult && u.atual[f] !== ult && u.periodos[ult].temCana) avisos.push(`${u.cod}: ${f === 'temProd' ? 'produção de açúcar e etanol' : f === 'temMilho' ? 'produção a partir do milho' : 'moagem'} não preenchida na ${ROT_PER[ult]}; usada a ${ROT_PER[u.atual[f]]}.`);
+    u.semDados = !PER_US.some(k => u.periodos[k].temCana || u.periodos[k].temMilho); }
+  return avisos;
+}
+
+// ---------- agregação: estado, períodos, polos, idade do canavial, produtos, milho, energia, indústria ----------
+function cdDoMunUs(nome) {   // "IVINHEMA E ANGÉLICA" -> Ivinhema; "Naviraí - MS" -> Naviraí
+  const base = normUs(nome).replace(/\s*-?\s*ms$/, '').split(/\s+e\s+|\/|,/)[0].trim();
+  for (const [cd, f] of Object.entries(MUN_IDX)) if (normUs(f.properties.NM_MUN) === base) return cd;
+  return null;
+}
+function analisarUsinas(US, cidCana) {
+  const R = {usinas: US.filter(u => !u.semDados), safra: US[0]?.safra || ''};
+  for (const u of R.usinas) { u.cd = cdDoMunUs(u.municipio); const rgi = u.cd ? MUN_IDX[u.cd].properties.NM_RGI : null; u.polo = POLO_RGI[rgi] || 'Outras'; u.rgi = rgi;
+    u.temCanaAlgum = PER_US.some(k => u.periodos[k].temCana); u.temMilhoAlgum = PER_US.some(k => u.periodos[k].temMilho); }
+  const cana = R.usinas.filter(u => u.temCanaAlgum), milho = R.usinas.filter(u => u.temMilhoAlgum);
+  R.nCana = cana.length; R.nMilho = milho.length; R.nFlex = R.usinas.filter(u => u.temCanaAlgum && u.temMilhoAlgum).length;
+  // valor de um campo num período, com "carregamento" da última avaliação preenchida até ele (para a série de revisões)
+  const ate = (u, k, flag) => { if (k === 'ant') return u.periodos.ant[flag] ? 'ant' : null; const i = PER_US.indexOf(k); for (let j = i; j >= 1; j--) if (u.periodos[PER_US[j]][flag]) return PER_US[j]; return null; };
+  const ind = (u, k) => {   // indicadores de uma usina num período
+    const P = u.periodos[k], A = P.area, areaT = somaObj(A.p) + somaObj(A.f);
+    let ap = 0, pp = 0; for (const pf of ['p', 'f']) for (const [c, a] of Object.entries(A[pf])) { const t = P.tch[pf][c]; if (a > 0 && t > 0) { ap += a; pp += a * t; } }
+    const mp = P.moidaP || 0, mf = P.moidaF || 0, moida = P.esmTot || (mp + mf);
+    const atr = (mp * (P.atrP || 0) + mf * (P.atrF || 0)) / ((P.atrP ? mp : 0) + (P.atrF ? mf : 0) || NaN);
+    const atrProd = ((P.acucar || 0) * ATR_ACUCAR + (P.anidro || 0) * ATR_ANIDRO + (P.hidratado || 0) * ATR_HIDRATADO) / 1000;   // mil t de ATR nos produtos (t de açúcar × kg/kg; m³ de etanol × kg/L = t)
+    return {moida, areaT, areaProd: ap, tch: ap ? pp / ap : null, atr: isFinite(atr) ? atr : null, acucar: P.acucar || 0, anidro: P.anidro || 0, hidratado: P.hidratado || 0,
+      etanol: P.etanol || 0, atrAcucar: (P.acucar || 0) * ATR_ACUCAR / 1000, atrProd, milho: P.milho || 0, etanolMilho: P.etanolMilho || 0, anidroMilho: P.anidroMilho || 0, ddg: P.ddg || 0,
+      venda: P.vendaMwh || 0, ger: P.gerMwh || 0, capDia: P.capDia || 0, dias: P.dias || 0, tr: [P.tr20 || 0, P.tr40 || 0, P.trMais || 0], plantio: (P.plantioRenov || 0) + (P.plantioExp || 0), plantioRenov: P.plantioRenov || 0, plantioExp: P.plantioExp || 0,
+      rot: {soja: P.rotSoja || 0, amendoim: P.rotAmendoim || 0, milho: P.rotMilho || 0, outros: P.rotOutros || 0}, A, T: P.tch, moidaP: mp, moidaF: mf, atrP: P.atrP, atrF: P.atrF};
+  };
+  const agrega = (lista, k, flag) => { const S = {n: 0, moida: 0, areaT: 0, areaProd: 0, tchW: 0, atrW: 0, atrM: 0, acucar: 0, anidro: 0, hidratado: 0, etanol: 0, atrAcucar: 0, atrProd: 0, milho: 0, etanolMilho: 0, anidroMilho: 0, ddg: 0, venda: 0, ger: 0, cap: 0, capDia: 0, tr: [0, 0, 0], plantio: 0, plantioRenov: 0, plantioExp: 0, rot: {soja: 0, amendoim: 0, milho: 0, outros: 0}, moidaPF: [0, 0], atrPF: [0, 0, 0, 0], tchPF: [0, 0, 0, 0], idade: {}, idadeT: {}, cods: []};
+    for (const u of lista) { const kk = flag ? ate(u, k, flag) : k; if (!kk) continue; const x = ind(u, kk); S.n++; S.cods.push(u.cod);
+      for (const c of ['moida', 'areaT', 'areaProd', 'acucar', 'anidro', 'hidratado', 'etanol', 'atrAcucar', 'atrProd', 'milho', 'etanolMilho', 'anidroMilho', 'ddg', 'venda', 'ger', 'plantio', 'plantioRenov', 'plantioExp', 'capDia']) S[c] += x[c];
+      if (x.tch) S.tchW += x.tch * x.areaProd; if (x.atr) { S.atrW += x.atr * x.moida; S.atrM += x.moida; }
+      if (x.capDia && x.dias) S.cap += x.capDia * x.dias / 1000; x.tr.forEach((v, i) => S.tr[i] += v); for (const r in S.rot) S.rot[r] += x.rot[r];
+      S.moidaPF[0] += x.moidaP; S.moidaPF[1] += x.moidaF; if (x.atrP) { S.atrPF[0] += x.atrP * x.moidaP; S.atrPF[1] += x.moidaP; } if (x.atrF) { S.atrPF[2] += x.atrF * x.moidaF; S.atrPF[3] += x.moidaF; }
+      for (const pf of ['p', 'f']) for (const [c, a] of Object.entries(x.A[pf])) { const t = x.T[pf][c]; S.idade[c] = (S.idade[c] || 0) + (a || 0); if (a > 0 && t > 0) { const kq = c + pf; (S.idadeT[kq] ??= [0, 0]); S.idadeT[kq][0] += a * t; S.idadeT[kq][1] += a; } }
+      for (const pf of [0, 1]) { const Ap = pf ? x.A.f : x.A.p, Tp = pf ? x.T.f : x.T.p; for (const [c, a] of Object.entries(Ap)) if (a > 0 && Tp[c] > 0) { S.tchPF[pf * 2] += a * Tp[c]; S.tchPF[pf * 2 + 1] += a; } } }
+    S.tch = S.areaProd ? S.tchW / S.areaProd : null; S.atr = S.atrM ? S.atrW / S.atrM : null; S.atrTot = S.atr ? S.atr * S.atrM / 1000 : null;   // mil t de ATR
+    S.mix = S.atrProd ? S.atrAcucar / S.atrProd : null; S.etanolTotal = S.etanol + S.etanolMilho;
+    S.tchP = S.tchPF[1] ? S.tchPF[0] / S.tchPF[1] : null; S.tchF = S.tchPF[3] ? S.tchPF[2] / S.tchPF[3] : null; S.atrPr = S.atrPF[1] ? S.atrPF[0] / S.atrPF[1] : null; S.atrFo = S.atrPF[3] ? S.atrPF[2] / S.atrPF[3] : null;
+    S.recup = S.atrM && S.atr ? S.atrProd / (S.atr * S.atrM / 1000) : null;   // ATR nos produtos ÷ ATR da cana moída (mil t ÷ mil t)
+    return S; };
+  // estimativa atual (última avaliação de cada usina) e revisões (carregando a última preenchida até cada avaliação)
+  R.atual = agrega(cana, 'a3', 'temCana'); R.atualProd = agrega(cana, 'a3', 'temProd'); R.atualMilho = agrega(milho, 'a3', 'temMilho'); R.atualEnergia = agrega(R.usinas, 'a3', 'temEnergia'); R.atualArea = agrega(cana, 'a3', 'temArea');
+  R.rev = {}; for (const k of ['a1', 'a2', 'a3']) R.rev[k] = {cana: agrega(cana, k, 'temCana'), prod: agrega(cana, k, 'temProd'), milho: agrega(milho, k, 'temMilho')};
+  // base comparável com a safra anterior: só usinas com os dois períodos preenchidos
+  const comp = (lista, flag) => { const l = lista.filter(u => u.periodos.ant[flag] && ate(u, 'a3', flag)); return {ant: agrega(l, 'ant', flag), atu: agrega(l, 'a3', flag), n: l.length, fora: lista.filter(u => !l.includes(u)).map(u => u.cod)}; };
+  // moagem e área/produtividade sempre sobre as mesmas usinas, para que os números de um parágrafo fechem entre si
+  const ambos = cana.filter(u => u.periodos.ant.temCana && u.periodos.ant.temArea && ate(u, 'a3', 'temCana') && ate(u, 'a3', 'temArea'));
+  R.compCana = comp(ambos, 'temCana'); R.compArea = comp(ambos, 'temArea'); R.compCana.fora = R.compArea.fora = cana.filter(u => !ambos.includes(u)).map(u => u.cod);
+  R.compProd = comp(cana, 'temProd'); R.compMilho = comp(milho, 'temMilho'); R.compEnergia = comp(R.usinas, 'temEnergia');
+  // polos
+  const polos = [...new Set(cana.map(u => u.polo))]; R.polos = polos.map(p => { const l = cana.filter(u => u.polo === p), c = comp(l, 'temCana'), ca = comp(l, 'temArea');
+    const chuva = chuvaGrupo(l); return {polo: p, n: l.length, atual: agrega(l, 'a3', 'temCana'), prod: agrega(l, 'a3', 'temProd'), area: agrega(l, 'a3', 'temArea'), comp: c, compArea: ca, chuva, a1: agrega(l, 'a1', 'temCana'), a3: agrega(l, 'a3', 'temCana')}; }).sort((a, b) => b.atual.moida - a.atual.moida);
+  R.chuva = chuvaGrupo(R.usinas.filter(u => u.temCanaAlgum));
+  // área mapeada (uso do solo) por polo, para comparar com a área informada pelas usinas
+  if (cidCana && typeof CANA !== 'undefined' && CANA) { R.mapa = {}; for (const [cd, m] of Object.entries(CANA.mun)) { const rgi = MUN_IDX[cd]?.properties.NM_RGI, p = POLO_RGI[rgi] || 'Outras'; R.mapa[p] = (R.mapa[p] || 0) + m.area; } R.mapaTot = somaObj(R.mapa); }
+  // calendário de colheita (ha por mês) e período de moagem
+  R.calendario = new Array(12).fill(0); for (const u of cana) (u.calendario || []).forEach((v, i) => R.calendario[i] += v || 0);
+  return R;
+}
+// chuva ocorrida × histórica informada pelas usinas (meses preenchidos por todas as usinas do grupo, ponderado pela moagem)
+function chuvaGrupo(l) {
+  const ok = l.filter(u => u.chuvaHist && u.chuvaOcorr); if (!ok.length) return null;
+  const meses = []; for (let i = 0; i < 12; i++) { const us = ok.filter(u => u.chuvaOcorr[i] != null && u.chuvaHist[i] > 0 && (u.chuvaOcorr[i] > 0 || i < 6)); if (us.length >= Math.max(1, ok.length * .6)) { let w = 0, o = 0, h = 0; for (const u of us) { const p = u.periodos.a3.esmTot || u.periodos.a2.esmTot || 1; w += p; o += p * u.chuvaOcorr[i]; h += p * u.chuvaHist[i]; } meses.push({i, o: o / w, h: h / w}); } }
+  if (!meses.length) return null; const o = meses.reduce((t, m) => t + m.o, 0), h = meses.reduce((t, m) => t + m.h, 0);
+  return {meses, o, h, desvio: h ? (o - h) / h : null};
+}
+
+// ---------- textos do resumo a partir das planilhas das usinas ----------
+const PROD_MILHO_REF = 5.4;      // t/ha (90 sacas/ha), só para converter o milho moído em área equivalente
+const KWH_CASA_MES = 160;        // consumo residencial médio de referência (kWh por mês)
+const milhoes = v => `${n1(v)} ${v >= 1.95 ? 'milhões' : 'milhão'}`;
+const miT = v => v >= 1000 ? `${milhoes(v / 1000)} de toneladas` : `${n0(v)} mil toneladas`;          // v em mil t
+const tTxt = v => v >= 1e6 ? `${n2(v / 1e6)} ${v >= 1.995e6 ? 'milhões' : 'milhão'} de toneladas` : `${n0(v / 1e3)} mil toneladas`;     // v em t
+const litros = v => v >= 1e6 ? `${n2(v / 1e6)} ${v >= 1.995e6 ? 'bilhões' : 'bilhão'} de litros` : `${n0(v / 1e3)} milhões de litros`;  // v em m³
+const varPct = (a, b) => a && b ? (b / a - 1) * 100 : null;
+const sinal = v => v == null ? '—' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${n1(Math.abs(v))}%`;
+const sobeDesce = (v, f = ['subiu', 'caiu', 'ficou estável']) => v == null ? '' : Math.abs(v) < 1 ? f[2] : v > 0 ? f[0] : f[1];
+const nomePer = {ant: 'safra anterior', a1: '1ª avaliação', a2: '2ª avaliação', a3: '3ª avaliação'};
+const IDADE_GRUPOS = [['Cana-planta', ['r12', 'e12', 'r18', 'e18']], ['2º corte', ['c2']], ['3º corte', ['c3']], ['4º corte', ['c4']], ['5º corte', ['c5']], ['6º corte ou mais', ['c6']]];
+function idadeResumo(S) {   // participação na área e produtividade (própria e fornecedor) por idade
+  const tot = somaObj(S.idade); if (!tot) return null;
+  const tch = (ks, pf) => { let a = 0, p = 0; for (const k of ks) { const v = S.idadeT[k + pf]; if (v) { p += v[0]; a += v[1]; } } return a ? p / a : null; };
+  const g = IDADE_GRUPOS.map(([nome, ks]) => ({nome, area: ks.reduce((t, k) => t + (S.idade[k] || 0), 0), tchP: tch(ks, 'p'), tchF: tch(ks, 'f')})).map(x => ({...x, pct: 100 * x.area / tot}));
+  const cortes = (g[0].area * 1 + g[1].area * 2 + g[2].area * 3 + g[3].area * 4 + g[4].area * 5 + g[5].area * 6.5) / tot;
+  return {g, tot, cortes};
+}
+// revisões numa base fixa: usinas com moagem informada na safra anterior e nas três avaliações
+function revisoesBase(R) {
+  const lista = R.usinas.filter(u => PER_US.every(k => u.periodos[k].temCana)); if (lista.length < 3) return null;
+  const ag = (k, flag) => { let moida = 0, atrW = 0, atrM = 0, ap = 0, tw = 0, et = 0, ac = 0; for (const u of lista) { const P = u.periodos[k]; moida += P.esmTot || ((P.moidaP || 0) + (P.moidaF || 0));
+      for (const [pf, w] of [['p', P.moidaP], ['f', P.moidaF]]) { const a = pf === 'p' ? P.atrP : P.atrF; if (a && w) { atrW += a * w; atrM += w; } }
+      const kA = [...PER_US.slice(0, PER_US.indexOf(k) + 1)].reverse().find(x => u.periodos[x].temArea), PA = kA ? u.periodos[kA] : P;
+      for (const pf of ['p', 'f']) for (const [c, a] of Object.entries(PA.area[pf])) { const t = PA.tch[pf][c]; if (a > 0 && t > 0) { ap += a; tw += a * t; } }
+      et += P.etanol || 0; ac += P.acucar || 0; }
+    return {moida, atr: atrM ? atrW / atrM : null, tch: ap ? tw / ap : null, etanol: et, acucar: ac}; };
+  const out = {n: lista.length}; for (const k of PER_US) out[k] = ag(k); return out;
+}
+// a safra de cana vai de abril a março: depois de 1º de abril do segundo ano, os números da planilha descrevem uma safra encerrada
+function safraEncerrada(s) { const m = /(\d{4})\D(\d{2,4})/.exec(s || ''); if (!m) return false; const a2 = +m[2] < 100 ? 2000 + +m[2] : +m[2]; return HOJE >= new Date(a2, 3, 1); }
+function textosUsinas(R) {
+  const T = {}, A = R.atual, cC = R.compCana, cA = R.compArea, cP = R.compProd, cM = R.compMilho, enc = safraEncerrada(R.safra), V = (p, q) => enc ? q : p;
+  const varia = (v, f) => sobeDesce(v, enc ? f[1] : f[0]);
+  // --- a safra nas usinas
+  const vM = varPct(cC.ant.moida, cC.atu.moida), vT = varPct(cA.ant.tch, cA.atu.tch), vA = varPct(cC.ant.atr, cC.atu.atr), vAT = varPct(cC.ant.atrTot, cC.atu.atrTot);
+  let t = `As planilhas preenchidas pelas usinas para a safra ${R.safra} reúnem ${R.nCana} unidades que processam cana${R.nMilho ? ` e ${R.nMilho} dedicadas ao etanol de milho` : ''}. ${V('Pela estimativa mais recente de cada uma, as usinas de cana devem moer', 'Pela última estimativa de cada uma, as usinas de cana moeram cerca de')} ${miT(A.moida)} na safra.`;
+  if (cC.n >= 3 && vM != null) t += ` Comparando apenas as ${cC.n} usinas que informaram os dois anos, a moagem ${varia(vM, [['cresce', 'cai', 'fica praticamente estável'], ['cresceu', 'caiu', 'ficou praticamente estável']])}${Math.abs(vM) >= 1 ? ` ${n0(Math.abs(vM))}%` : ''}, de ${n1(cC.ant.moida / 1000)} para ${miT(cC.atu.moida)}.`;
+  const vAr = varPct(cA.ant.areaProd, cA.atu.areaProd), vImp = vT != null && vAr != null ? ((1 + vT / 100) * (1 + vAr / 100) - 1) * 100 : null, vMa = varPct(cA.ant.moida, cA.atu.moida);
+  const prodTab = cA.atu.tchW / 1000, gapTab = cA.atu.moida ? prodTab / cA.atu.moida - 1 : 0;
+  if (vT != null && vImp != null && vMa != null && Math.abs(vImp - vMa) <= 4) t += ` A variação vem do campo: a produtividade média dos canaviais ${sobeDesce(vT)} de ${n0(cA.ant.tch)} para ${n0(cA.atu.tch)} toneladas por hectare (${sinal(vT)}) e a área colhida ${sobeDesce(vAr, ['aumentou', 'diminuiu', 'ficou estável'])}${Math.abs(vAr) >= 1 ? ` ${n0(Math.abs(vAr))}%` : ''}.`;
+  else if (vT != null && vImp != null && vMa != null) t += ` A produtividade média informada ${sobeDesce(vT)} de ${n0(cA.ant.tch)} para ${n0(cA.atu.tch)} toneladas por hectare (${sinal(vT)}) e a área colhida ${sobeDesce(vAr, ['aumentou', 'diminuiu', 'ficou estável'])}${Math.abs(vAr) >= 1 ? ` ${n0(Math.abs(vAr))}%` : ''}, o que corresponderia a ${n0(Math.abs(vImp))}% ${vImp >= 0 ? 'mais' : 'menos'} cana, bem ${vImp > vMa ? 'acima' : 'abaixo'} da variação da moagem. As duas partes da planilha não fecham entre si: multiplicando área por produtividade, o canavial ${V('renderia', 'teria rendido')} ${miT(prodTab)}, ${n0(Math.abs(gapTab) * 100)}% ${gapTab > 0 ? 'acima' : 'abaixo'} da moagem informada. ${gapTab > 0 ? 'Isso pode indicar cana deixada no campo para a safra seguinte, perdas na colheita ou estimativas de produtividade mais otimistas que as de moagem.' : 'Isso pode indicar cana comprada de terceiros que não aparece na tabela de área ou áreas não informadas.'} Por isso o resumo usa a moagem como medida de volume e a produtividade só como indicador de tendência.`;
+  if (vA != null) t += ` A qualidade da cana, medida pelo ATR, ${sobeDesce(vA, ['melhorou', 'recuou', 'se manteve'])} de ${n1(cC.ant.atr)} para ${n1(cC.atu.atr)} kg de açúcares por tonelada.`;
+  const vAT2 = vM != null && vA != null ? ((1 + vM / 100) * (1 + vA / 100) - 1) * 100 : null;
+  if (vAT2 != null) t += ` No saldo, a quantidade total de açúcares entregue às indústrias (moagem × ATR) ${varia(vAT2, [['aumenta', 'diminui', 'fica estável'], ['aumentou', 'diminuiu', 'ficou estável']])}${Math.abs(vAT2) >= 1 ? ` cerca de ${n0(Math.abs(vAT2))}%` : ''}; é ela que define quanto açúcar e etanol a safra ${V('pode render', 'rendeu')}.`;
+  T.safra = [t];
+  const rv = revisoesBase(R); T.rev = rv;
+  if (rv) { const f = k => `${miT(rv[k].moida)}`, d = (a, b) => varPct(rv[a].moida, rv[b].moida);
+    let t2 = `As estimativas mudaram ao longo da safra (mesmas ${rv.n} usinas em todas as etapas). Na 1ª avaliação, elas esperavam moer ${f('a1')}${rv.a1.atr ? `, com ATR de ${n1(rv.a1.atr)} kg/t` : ''}.`;
+    const d12 = d('a1', 'a2'), d23 = d('a2', 'a3');
+    t2 += ` Na 2ª, a expectativa ${Math.abs(d12) < 1 ? 'praticamente não mudou' : d12 > 0 ? `subiu para ${f('a2')} (${sinal(d12)})` : `caiu para ${f('a2')} (${sinal(d12)})`}${Math.abs(d12) >= 1 && rv.a2.tch && rv.a1.tch ? `, com a produtividade revista de ${n0(rv.a1.tch)} para ${n0(rv.a2.tch)} t/ha` : ''}.`;
+    t2 += ` A 3ª avaliação ${Math.abs(d23) < 1 ? 'manteve a moagem' : d23 > 0 ? `elevou a moagem para ${f('a3')} (${sinal(d23)})` : `trouxe um corte, para ${f('a3')} (${sinal(d23)})`}${rv.a3.atr && rv.a2.atr && Math.abs(rv.a3.atr - rv.a2.atr) >= 1 ? ` e ${rv.a3.atr < rv.a2.atr ? 'reduziu' : 'elevou'} o ATR esperado para ${n1(rv.a3.atr)} kg/t` : ''}.`;
+    T.safra.push(t2); }
+  // chuva informada pelas usinas
+  if (R.chuva?.meses.length >= 3) { const C = R.chuva, ms = C.meses.map(m => ({...m, d: (m.o - m.h) / m.h * 100}));
+    const secos = ms.filter(m => m.d <= -30), umidos = ms.filter(m => m.d >= 30), nomeM = m => MESES_EXT[m.i], ano = (R.safra.match(/(\d{4})/) || [])[1];
+    let t3 = `As usinas também registram a chuva nas suas áreas. De ${MESES_EXT[ms[0].i]} a ${MESES_EXT[ms.at(-1).i]}${ano ? ` de ${ano}` : ''}, choveu ${n0(Math.abs(C.desvio * 100))}% ${C.desvio < 0 ? 'abaixo' : 'acima'} da média histórica informada por elas (${n0(C.o)} mm, contra ${n0(C.h)} mm).`;
+    if (secos.length) t3 += ` ${secos.length === 1 ? `O mês mais seco foi ${nomeM(secos[0])}, com chuva ${n0(-secos[0].d)}% abaixo da média` : `Os meses mais secos foram ${lista(secos.map(nomeM))}, com chuva entre ${n0(-Math.max(...secos.map(m => m.d)))}% e ${n0(-Math.min(...secos.map(m => m.d)))}% abaixo da média`}`;
+    if (umidos.length) t3 += `${secos.length ? ', enquanto ' : ' '}${lista(umidos.map(m => nomeM(m)))} ${umidos.length === 1 ? 'teve' : 'tiveram'} chuva bem acima do normal (${lista(umidos.map(m => `${n0(m.d)}% acima`))})`;
+    if (secos.length || umidos.length) t3 += '.';
+    const ps = R.polos.filter(p => p.chuva?.desvio != null && p.compArea.n >= 2 && p.compArea.ant.tch && p.compArea.atu.tch).map(p => ({p, d: p.chuva.desvio * 100, v: varPct(p.compArea.ant.tch, p.compArea.atu.tch)}));
+    if (ps.length >= 2) { const pior = ps.reduce((a, b) => b.d < a.d ? b : a), melhor = ps.reduce((a, b) => b.v > a.v ? b : a);
+      t3 += ` Entre os polos produtores, o ${pior.p.polo} teve a chuva mais baixa em relação à média (${n0(-pior.d)}% abaixo)${pior.v < 0 ? ` e ${ps.filter(x => x.v < 0).length === 1 ? 'foi o único em que a produtividade caiu' : 'teve queda de produtividade'} em relação à safra anterior (${sinal(pior.v)})` : pior === melhor ? ', mas ainda assim teve o maior ganho de produtividade' : `, e sua produtividade variou ${sinal(pior.v)}, contra ${sinal(melhor.v)} no ${melhor.p.polo}`}. É uma associação, não uma prova de causa, mas coerente com o papel da chuva de verão no crescimento da cana.`; }
+    T.safra.push(t3); }
+  // --- canavial
+  const I = idadeResumo(R.atualArea), Ia = cA.n >= 3 ? idadeResumo(cA.ant) : null;
+  if (I) { const g = I.g, velho = g[4].pct + g[5].pct, plnt = g[0];
+    let t4 = `O canavial informado pelas usinas soma ${haTxt(I.tot)}. A cana-planta (primeiro corte) ocupa ${n0(plnt.pct)}% da área, os segundos e terceiros cortes ${n0(g[1].pct + g[2].pct)}%, e os canaviais de quinto corte em diante ${n0(velho)}%. Em média, os canaviais estão ${I.cortes < 3 ? 'entre o segundo e o terceiro corte' : I.cortes < 4 ? 'entre o terceiro e o quarto corte' : 'entre o quarto e o quinto corte'}.`;
+    if (Ia) { const va = Ia.g[4].pct + Ia.g[5].pct; if (Math.abs(velho - va) >= 2) t4 += ` Na safra anterior, os canaviais de quinto corte em diante eram ${n0(va)}% da área: o canavial ${velho > va ? 'envelheceu' : 'rejuvenesceu'}.`; }
+    const tP = g.map(x => x.tchP), ok = tP.filter(Boolean); if (ok.length >= 4) t4 += ` A idade pesa na produtividade: nas áreas próprias das usinas, a cana-planta rende cerca de ${n0(g[0].tchP)} t/ha, o segundo corte ${n0(g[1].tchP)} t/ha e, a partir do quarto corte, a produtividade fica perto de ${n0((g[3].tchP + g[4].tchP + g[5].tchP) / 3)} t/ha.`;
+    if (A.tchP && A.tchF) t4 += ` A cana de fornecedores rende menos que a própria (${n0(R.atualArea.tchF)} contra ${n0(R.atualArea.tchP)} t/ha)${R.atualArea.atrFo && R.atualArea.atrPr ? `, mas tem ATR ${R.atualArea.atrFo > R.atualArea.atrPr ? 'um pouco maior' : 'semelhante'} (${n1(R.atualArea.atrFo)} contra ${n1(R.atualArea.atrPr)} kg/t)` : ''}; ela responde por ${n0(100 * A.moidaPF[1] / (A.moidaPF[0] + A.moidaPF[1]))}% da cana moída.`;
+    T.canavial = [t4];
+    const S = R.atualArea, ren = S.plantioRenov, exp = S.plantioExp;
+    if (ren || exp) { const tx = 100 * ren / I.tot; let t5 = `No ano, as usinas plantaram ${haTxt(ren + exp)} de cana: ${haTxt(ren)} para renovar canaviais velhos e ${haTxt(exp)} em áreas novas. A renovação equivale a ${n1(tx)}% do canavial; para manter um ciclo de cinco a seis cortes, seria preciso renovar algo entre 15% e 20% ao ano. ${tx < 13 ? 'Com o ritmo atual, a tendência é de envelhecimento do canavial e de pressão sobre a produtividade nas próximas safras, a menos que a renovação acelere.' : 'O ritmo de renovação é compatível com a manutenção da produtividade.'}`;
+      const rot = S.rot, rt = rot.soja + rot.amendoim + rot.milho + rot.outros; if (rt > 0) t5 += ` Nas áreas em reforma, ${haTxt(rt)} receberam outra cultura antes do replantio${rot.soja / rt > .5 ? `, sobretudo soja (${n0(100 * rot.soja / rt)}% dessa área). A reforma dos canaviais, portanto, também alimenta a área de soja do estado` : `: ${lista(Object.entries({soja: rot.soja, amendoim: rot.amendoim, milho: rot.milho, 'outras culturas': rot.outros}).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k]) => k))}`}.`;
+      T.canavial.push(t5); } }
+  // --- açúcar, etanol e energia
+  const P = R.atualProd, M = R.atualMilho, etTot = P.etanol + M.etanolMilho;
+  if (P.n) { const vAc = varPct(cP.ant.acucar, cP.atu.acucar), vEt = varPct(cP.ant.etanol, cP.atu.etanol);
+    let t6 = `Das usinas de cana ${V('devem sair', 'saíram')} ${tTxt(P.acucar)} de açúcar e ${litros(P.etanol)} de etanol, sendo ${n0(100 * P.anidro / (P.etanol || 1))}% anidro (misturado à gasolina) e ${n0(100 * P.hidratado / (P.etanol || 1))}% hidratado (vendido nos postos).`;
+    if (cP.n >= 3 && vAc != null && vEt != null) t6 += ` Na mesma base de usinas, o açúcar ${varia(vAc, [['cresce', 'cai', 'fica estável'], ['cresceu', 'caiu', 'ficou estável']])} ${Math.abs(vAc) >= 1 ? n0(Math.abs(vAc)) + '% ' : ''}e o etanol de cana ${varia(vEt, [['cresce', 'cai', 'fica estável'], ['cresceu', 'caiu', 'ficou estável']])}${Math.abs(vEt) >= 1 ? ' ' + n0(Math.abs(vEt)) + '%' : ''} em relação à safra anterior.`.replace('  ', ' ');
+    if (P.mix != null) { t6 += ` Medido em açúcares (ATR), ${n0(100 * P.mix)}% da cana ${V('vai', 'foi')} para o açúcar e ${n0(100 - 100 * P.mix)}% para o etanol${cP.ant.mix != null && Math.abs(cP.atu.mix - cP.ant.mix) >= .01 ? `, contra ${n0(100 * cP.ant.mix)}% para o açúcar na safra anterior` : ''}: Mato Grosso do Sul segue como um estado essencialmente alcooleiro.`;
+      const r1 = R.rev.a1.prod, r3 = R.rev.a3.prod; if (r1.mix != null && r3.mix != null && Math.abs(r3.mix - r1.mix) >= .02) t6 += ` Ao longo das avaliações, a destinação ao açúcar foi revista de ${n0(100 * r1.mix)}% para ${n0(100 * r3.mix)}%, ${r3.mix < r1.mix ? 'deslocando ATR para o etanol' : 'deslocando ATR para o açúcar'}.`; }
+    T.produtos = [t6]; }
+  const E = R.atualEnergia, cE = R.compEnergia; if (E.venda > 0) { const canaV = R.usinas.filter(u => u.temCanaAlgum).reduce((t, u) => { const k = [...PER_US].reverse().find(x => x !== 'ant' && u.periodos[x].temEnergia); return t + (k ? u.periodos[k].vendaMwh || 0 : 0); }, 0);
+    const vEn = canaV || E.venda, casas = vEn * 1000 / (KWH_CASA_MES * 12), casasTxt = casas >= 1e6 ? `${milhoes(casas / 1e6)} de` : `${n0(casas / 1e3)} mil`;
+    let t7 = `Além do açúcar e do etanol, o bagaço da cana vira eletricidade. As usinas de cana ${V('estimam', 'estimaram')} vender ${n1(vEn / 1e6).replace(',0', '')} ${vEn >= 2e6 ? 'milhões' : 'milhão'} de MWh à rede${cE.n >= 3 && cE.ant.venda ? ` (${sinal(varPct(cE.ant.venda, cE.atu.venda))} sobre a safra anterior, na mesma base)` : ''}, o suficiente para abastecer cerca de ${casasTxt} residências durante um ano (consumo médio de ${KWH_CASA_MES} kWh por mês).`;
+    if (canaV && P.moida) t7 += ` Isso equivale a ${n0(canaV / P.moida)} kWh exportados por tonelada de cana moída.`;
+    const milV = E.venda - canaV; if (R.nMilho && milV >= 0) t7 += ` Já as usinas de milho consomem quase toda a energia que geram${milV > 0 ? `, vendendo só ${n0(milV / 1e3)} mil MWh` : ''}.`;
+    (T.produtos ??= []).push(t7); }
+  // --- etanol de milho
+  if (M.n && M.milho) { const vEM = varPct(cM.ant.etanolMilho, cM.atu.etanolMilho), share = 100 * M.etanolMilho / etTot, rend = M.etanolMilho * 1000 / (M.milho * 1000), haEq = M.milho * 1000 / PROD_MILHO_REF, m2 = soloClasse('Milho 2ª safra', null)?.area;
+    let t8 = `O etanol de milho já é parte central da história. As ${M.n} usinas que processam o grão ${V('devem moer', 'moeram')} ${miT(M.milho)} de milho e ${V('produzir', 'produziram')} ${litros(M.etanolMilho)} de etanol${vEM != null && cM.n >= 1 ? `, ${n0(Math.abs(vEM))}% ${vEM >= 0 ? 'a mais' : 'a menos'} que na safra anterior` : ''}. Com isso, ${n0(share)}% de todo o etanol produzido no estado (${litros(etTot)}) ${V('vem', 'veio')} do milho.`;
+    t8 += ` Cada tonelada de milho rende cerca de ${n0(rend)} litros de etanol${M.ddg ? ` e ${n0(1000 * M.ddg / M.milho)} kg de DDG, um farelo proteico usado na ração animal (${miT(M.ddg)} no total)` : ''}.`;
+    t8 += ` O volume de milho moído equivale à colheita de cerca de ${haTxt(haEq)} de milho com produtividade de ${n0(PROD_MILHO_REF * 1000 / 60)} sacas por hectare${m2 ? `, ou ${n0(100 * haEq / m2)}% da área de milho de segunda safra mapeada no estado` : ''}. Uma demanda desse tamanho torna as usinas compradoras de peso no mercado de milho do estado.`;
+    T.milho = [t8]; }
+  // --- polos
+  const PL = R.polos.filter(p => p.atual.n >= 2);
+  if (PL.length >= 2) { const tot = PL.reduce((t, p) => t + p.atual.moida, 0), ord = [...PL].sort((a, b) => b.atual.moida - a.atual.moida);
+    const tchMax = PL.reduce((a, b) => (b.area.tch || 0) > (a.area.tch || 0) ? b : a), atrMax = PL.reduce((a, b) => (b.atual.atr || 0) > (a.atual.atr || 0) ? b : a), atrMin = PL.reduce((a, b) => (b.atual.atr || 999) < (a.atual.atr || 999) ? b : a);
+    const mixMin = PL.filter(p => p.prod.mix != null).reduce((a, b) => b.prod.mix < a.prod.mix ? b : a, PL[0]);
+    let t9 = `A cana se organiza em ${PL.length} polos. O ${ord[0].polo} concentra ${n0(100 * ord[0].atual.moida / tot)}% da moagem (${ord[0].atual.n} usinas)${ord[1] ? `, seguido pelo ${ord[1].polo} (${n0(100 * ord[1].atual.moida / tot)}%)` : ''}${ord[2] ? ` e pelo ${ord[2].polo} (${n0(100 * ord[2].atual.moida / tot)}%)` : ''}.`;
+    t9 += ` O ${tchMax.polo} tem os canaviais mais produtivos (${n0(tchMax.area.tch)} t/ha), enquanto o ${atrMax.polo} entrega a cana mais rica em açúcares (${n1(atrMax.atual.atr)} kg/t de ATR, contra ${n1(atrMin.atual.atr)} kg/t no ${atrMin.polo}).`;
+    if (mixMin.prod.mix != null) t9 += ` O ${mixMin.polo} é o mais voltado ao etanol: só ${n0(100 * mixMin.prod.mix)}% do ATR vai para o açúcar.`;
+    const cres = PL.filter(p => p.comp.n >= 2).map(p => ({p, v: varPct(p.comp.ant.moida, p.comp.atu.moida)})).filter(x => x.v != null).sort((a, b) => b.v - a.v);
+    if (cres.length >= 2) t9 += ` Em relação à safra anterior, a moagem ${cres[0].v >= 0 ? V('cresce mais', 'cresceu mais') : V('cai menos', 'caiu menos')} no ${cres[0].p.polo} (${sinal(cres[0].v)}) e ${cres.at(-1).v < 0 ? V('recua', 'recuou') : V('cresce menos', 'cresceu menos')} no ${cres.at(-1).p.polo} (${sinal(cres.at(-1).v)}).`;
+    T.polos = [t9];
+    if (R.mapa && R.mapaTot) { const inf = R.atualArea.areaT, mp = R.mapaTot;
+      let t10 = `O mapeamento de uso do solo (Aprosoja-MS) identifica ${haTxt(mp)} de cana no estado, ${mp > inf ? `${n0(100 * (mp / inf - 1))}% a mais` : `${n0(100 * (1 - mp / inf))}% a menos`} que os ${haTxt(inf)} informados pelas usinas.`;
+      const dif = PL.map(p => ({p, m: R.mapa[p.polo] || 0, i: p.area.areaT})).filter(x => x.i > 0).map(x => ({...x, r: x.m / x.i})).sort((a, b) => b.r - a.r);
+      if (dif.length >= 2) t10 += ` A diferença se concentra no ${dif[0].p.polo}, onde o mapa mostra ${n1(dif[0].r).replace(',0', '')} vez${dif[0].r >= 2 ? 'es' : ''} a área informada; no ${dif.at(-1).p.polo}, as duas fontes ${Math.abs(dif.at(-1).r - 1) < .15 ? 'praticamente coincidem' : `ficam mais próximas (${n1(dif.at(-1).r)} vez)`}.`;
+      t10 += ' Parte da diferença pode ser cana de usinas que não responderam ou que ficam fora do estado, áreas em formação ou abandonadas e erros de classificação do mapa; o tema merece checagem com as usinas.';
+      T.polos.push(t10); } }
+  // --- indústria
+  const ut = R.usinas.filter(u => u.temCanaAlgum).map(u => { const k = [...PER_US].reverse().find(x => x !== 'ant' && u.periodos[x].temCana); const Q = k && u.periodos[k]; return Q && Q.capDia > 0 && Q.dias > 0 ? {m: Q.esmTot, c: Q.capDia * Q.dias / 1000} : null; }).filter(Boolean);
+  const ind = []; if (ut.length >= 3) { const m = ut.reduce((t, x) => t + x.m, 0), c = ut.reduce((t, x) => t + x.c, 0); ind.push(`As usinas ${V('operam', 'operaram')} com ${n0(100 * m / c)}% da capacidade instalada ao longo dos dias de safra previstos${m / c < .85 ? `: haveria espaço para moer cerca de ${miT(c - m)} a mais, o que mostra que hoje o limite está no campo (oferta de cana), e não na indústria` : ''}.`); }
+  const cal = R.calendario, ct = cal.reduce((t, v) => t + v, 0);
+  if (ct > 0) { let ac = 0; const acum = cal.map(v => (ac += v) / ct * 100), pico = cal.indexOf(Math.max(...cal)), meio = acum.findIndex(v => v >= 50);
+    ind.push(`Pelo calendário informado, a colheita se concentra entre ${MESES_EXT[cal.findIndex(v => v / ct >= .05)]} e ${MESES_EXT[11 - [...cal].reverse().findIndex(v => v / ct >= .05)]}, com pico em ${MESES_EXT[pico]}. Metade da área costuma estar colhida ao fim de ${MESES_EXT[meio]}${acum[5] != null ? `, e ${n0(acum[5])}% até o fim de junho` : ''}.`); }
+  const tr = R.atual.tr, trT = tr[0] + tr[1] + tr[2]; if (trT > 0) ind.push(`Na logística, ${n0(100 * tr[2] / trT)}% da cana percorre mais de 40 km até a indústria, e ${n0(100 * tr[0] / trT)}% vem de até 20 km.`);
+  const mec = R.usinas.reduce((t, u) => t + (u.mecCrua || 0), 0), totC = R.usinas.reduce((t, u) => t + (u.mecCrua || 0) + (u.mecQueim || 0) + (u.manCrua || 0) + (u.manQueim || 0), 0);
+  if (totC > 0 && mec / totC > .9) ind.push(`A colheita é praticamente toda mecanizada e sem queima (${n0(100 * mec / totC)}% da cana).`);
+  if (ind.length) T.industria = [ind.join(' ')];
+  return T;
+}
+
+// leitura das planilhas da pasta 03_Planilha_Usinas (só no navegador; nada é publicado)
+let USINAS = null;
+async function carregarUsinas(lista) {
+  USINAS = null; if (!lista.length) return;
+  const porSafra = {}, arquivos = [];
+  for (const a of lista) {
+    try { const f = await a.obter(), wb = XLSX.read(await f.arrayBuffer(), {cellDates: true}), doArq = [];
+      for (const nome of wb.SheetNames) { const ws = wb.Sheets[nome]; if (!ws['!ref']) continue; const rg = XLSX.utils.decode_range(ws['!ref']); rg.s.c = 0; rg.s.r = 0;
+        const u = lerQuestionario(XLSX.utils.sheet_to_json(ws, {header: 1, raw: true, defval: null, range: rg})); if (u && u.cod) { u.arquivo = f.name; doArq.push(u); } }
+      // a safra vale para o arquivo inteiro: pelo nome (…25_26…) ou pela mais citada nos questionários (o campo costuma ficar desatualizado)
+      const nS = s => { const m = String(s || '').replace(/\s/g, '').match(/(20\d{2})\D?(\d{2})(\d{2})?$/); return m ? `${m[1]}/${(m[3] || m[2]).padStart(2, '0')}` : null; };
+      const mN = f.name.match(/(?:^|\D)(\d{2})[_\-.](\d{2})(?:\D|$)/), porNome = mN && +mN[2] === (+mN[1] + 1) % 100 ? `20${mN[1]}/${mN[2]}` : null;
+      const cont = {}; doArq.forEach(u => { const k = nS(u.safra); if (k) cont[k] = (cont[k] || 0) + 1; }); const moda = Object.entries(cont).sort((x, y) => y[1] - x[1])[0]?.[0];
+      const sA = porNome || moda || '?'; doArq.forEach(u => { u.safraInformada = u.safra; u.safra = sA; (porSafra[sA] ??= {})[u.cod] = u; });   // mesma usina em dois arquivos da mesma safra: vale o último lido
+      arquivos.push(`${f.name} (${doArq.length} questionários, safra ${sA})`); }
+    catch (e) { console.warn('planilha de usina não lida', a.caminho, e); arquivos.push(`${a.caminho.split('/').pop()}: não foi possível ler`); }
+  }
+  const safras = Object.keys(porSafra).filter(s => s !== '?').sort(); if (!safras.length) return;
+  const s = safras.at(-1), US = Object.values(porSafra[s]), avisos = checarUsinas(US);
+  let R = null; try { R = analisarUsinas(US, 'cana'); R.textos = textosUsinas(R); } catch (e) { console.warn('análise das usinas falhou', e); }
+  USINAS = {safra: s, safras, US, R, avisos, arquivos};
+  const st = $('st-pasta'); st.innerHTML += `<br>Usinas: ${US.length} questionários da safra ${esc(s)}${avisos.length ? ` · ${avisos.length} ajuste${avisos.length > 1 ? 's' : ''} de consistência` : ''}`;
+}
+// relatos de cana contados como texto corrido e cruzados com as planilhas das usinas, o clima e os mapas
+async function prosaRelatosCana(filtro, R) {
+  // regras: o relatório traz o que é novo; as planilhas (safra passada) e os mapas só entram para confirmar,
+  // dar escala ou explicar uma diferença, sem repetir números já apresentados nas seções anteriores
+  const out = [];
+  for (const rel of RELATOS.filter(r => r.grupo === 'cana' && (!filtro || filtro(r)) && r.fatos?.length)) {
+    const fs = rel.fatos, um = k => fs.filter(f => f.cat === k), um1 = k => um(k)[0];
+    const rot = [...new Set(fs.filter(f => f.tipoEsc === 'regiao').flatMap(f => f.escopo))], escp = rot.length ? rot : [...rel.muns];
+    const tn = norm(rel.texto), mq = tn.match(/(primeira|segunda|terceira|quarta|ultima) semana de ([a-z]+)/), mE = /entre os dias (\d{1,2}) e (\d{1,2}) de ([a-zç]+)/i.exec(rel.texto);
+    const ano = rel.data.getFullYear(), mes = rel.data.getMonth(), quando = mq ? `Na ${mq[1] === 'ultima' ? 'última' : mq[1]} semana de ${MESES_EXT[mes]} de ${ano}` : mE ? `Entre ${mE[1]} e ${mE[2]} de ${mE[3].toLowerCase()} de ${ano}` : `Em ${dExt(rel.data)} de ${ano}`;
+    const mS = rel.texto.match(/safra[^.\n]{0,40}?(20\d{2})\s*\/\s*(20\d{2}|\d{2})/i), safraRel = mS ? `${mS[1]}/${mS[2].slice(-2)}` : null;
+    const usR = R ? R.usinas.filter(u => u.cd && escp.includes(u.cd) && u.temCanaAlgum) : [], outraSafra = R && safraRel && safraRel !== R.safra;
+    const passada = outraSafra ? 'na safra passada' : 'na mesma safra', passadaDa = outraSafra ? 'da safra passada' : 'da mesma safra';
+    const p1 = [`${quando}, a equipe visitou usinas de açúcar e etanol em ${lista(escp.map(nmMun).filter(Boolean))}${safraRel ? `, no levantamento da safra ${safraRel}` : ''}.${outraSafra ? ` Como as planilhas mais recentes das usinas são da safra ${R.safra}, elas servem aqui apenas como referência do que é habitual para essas unidades.` : ''}`];
+    // colheita: relato × calendário das mesmas usinas
+    const co = um1('colheita'), ce = um1('colheitaEsperada'), ac = um1('atrasoColheita'), cm = um1('climaMes');
+    if (co) { let t = `A colheita estava ${ac || (ce && ce.pct > co.pct) ? 'atrasada' : 'em andamento'}: ${n0(co.pct)}% da área havia sido colhida${ce ? `, quando o normal para a época seria ${ce.pct === 50 ? 'cerca de metade' : `${n0(ce.pct)}%`}, segundo as usinas` : ''}${cm?.acima ? `, por causa das chuvas acima da média de ${MESES_EXT[cm.mes]}` : ''}.`;
+      const cal = new Array(12).fill(0); usR.forEach(u => (u.calendario || []).forEach((v, i) => cal[i] += v || 0)); const tot = cal.reduce((a, b) => a + b, 0);
+      if (tot > 0) { let acu = 0; for (let i = 0; i < mes; i++) acu += cal[i]; acu += cal[mes] * Math.min(1, rel.data.getDate() / 30); const esp = 100 * acu / tot, ref = ce?.pct;
+        const qd = rel.data.getDate() <= 10 ? `o início de ${MESES_EXT[mes]}` : rel.data.getDate() <= 20 ? `meados de ${MESES_EXT[mes]}` : `o fim de ${MESES_EXT[mes]}`;
+        if (ref == null || Math.abs(esp - ref) <= 8) t += ` O calendário de colheita que essas usinas planejaram ${passada} confirma a referência.`;
+        else if (esp > co.pct + 2) t += ` O calendário que essas usinas planejaram ${passada} previa um ritmo ${esp < ref ? 'mais lento' : 'mais rápido'}, com cerca de ${n0(esp)}% colhido até ${qd}; mesmo por essa referência a colheita estava atrás do previsto, e o atraso fica entre ${n0(Math.min(esp, ref) - co.pct)} e ${n0(Math.max(esp, ref) - co.pct)} pontos percentuais, conforme a referência adotada.`;
+        else t += ` Pelo calendário que essas usinas planejaram ${passada}, porém, elas costumam ter cerca de ${n0(esp)}% colhido até ${qd}, praticamente o que foi observado. A percepção de atraso deve refletir um plano mais acelerado para esta safra, que as chuvas impediram de cumprir; por isso o resumo trata o atraso como moderado.`; }
+      p1.push(t); }
+    // chuva do mês citado: dado do modelo × média histórica das usinas
+    if (cm && i1ok(ano, cm.mes)) { const i0 = new Date(ano, cm.mes, 1, 12), i1 = new Date(ano, cm.mes + 1, 0, 12), dc = await climaDiario(i0, i1), sr = serieDias(dc, Object.fromEntries(escp.map(cd => [cd, 1])), i0, i1);
+      const hs = usR.map(u => u.chuvaHist?.[cm.mes]).filter(v => v > 0), h = hs.length ? hs.reduce((a, b) => a + b, 0) / hs.length : null;
+      if (sr.length >= 25 && h) { const p = sr.reduce((t, x) => t + x.p, 0), dch = sr.filter(x => x.p >= 1).length;
+        if (!cm.acima || p >= h * 1.2) p1.push(`Os dados de clima confirmam: em ${MESES_EXT[cm.mes]} choveu ${n0(p)} mm nesses municípios, ${p >= h ? `${n1(p / h).replace(',0', '')} vez${p / h >= 1.95 ? 'es' : ''} a média histórica informada pelas usinas` : `${n0(100 * p / h)}% da média`}.`);
+        else if (dch >= 12) p1.push(`No total do mês, os dados de clima mostram ${n0(p)} mm, perto da média de ${n0(h)} mm informada pelas usinas, mas distribuídos em ${dch} dias. Para a colheita, o que pesa é a frequência da chuva, que interrompe as máquinas e encharca os carreadores, mais do que o volume: o relato é coerente com essa distribuição.`);
+        else p1.push(`Os dados de clima, por sua vez, não mostram um ${MESES_EXT[cm.mes]} chuvoso (${n0(p)} mm, contra média de ${n0(h)} mm, em ${dch} dias). Como o dado vem de um modelo, com pontos espaçados de 10 a 25 km, chuvas localizadas sobre as áreas das usinas podem não aparecer; o resumo mantém a informação de campo, que é observação direta, mas ela merece confirmação nas próximas visitas.`); } }
+    // qualidade
+    const p2 = [], ai = um1('atrImpacto'), pg = [...new Set(um('pragas').flatMap(f => f.itens))];
+    const atrRef = usR.length ? (() => { let w = 0, s = 0; for (const u of usR) { const k = ['a3', 'a2', 'a1'].find(x => u.periodos[x].temCana); const P = k && u.periodos[k]; if (!P) continue; for (const [a, m] of [[P.atrP, P.moidaP], [P.atrF, P.moidaF]]) if (a && m) { s += a * m; w += m; } } return w ? s / w : null; })() : null;
+    if (ai) { const atrMin = atrRef ? atrRef * (1 - ai.pct / 100) : null;
+      p2.push(`As chuvas fora de época também pesam na qualidade: as usinas falam em perda de até ${ai.pct}% no ATR${atrMin ? `. Aplicada ao ATR habitual dessas usinas, uma perda desse tamanho levaria a cerca de ${n0(atrMin)} kg de açúcares por tonelada${atrMin < 110 ? ', nível que seria excepcionalmente baixo; por isso o número deve ser lido como o pior cenário para as áreas mais afetadas, e não como a média da região' : ''}` : ''}.`); }
+    const prag = pg.filter(x => !/isopor/.test(x)); if (prag.length) p2.push(`Foram citados ainda problemas com ${lista(prag)}.`);
+    if (pg.some(x => /isopor/.test(x))) { let t = 'Nos solos mais arenosos, a preocupação é a isoporização, anomalia em que o colmo perde caldo e fica esponjoso, ligada a variedades predispostas e a condições climáticas adversas, com perdas de ATR e de produtividade.';
+      const tx = (() => { let a = 0, ar = 0, me = 0; for (const cd of escp) { const r = soloClasse('Cana-de-açúcar', cd); if (!r) continue; a += r.area; ar += r.area * (r.textura['Arenosa'] || 0) / 100; me += r.area * (r.textura['Média'] || 0) / 100; } return a ? {ar: 100 * ar / a, me: 100 * me / a} : null; })();
+      if (tx) t += tx.ar < 3 ? ` O mapa de solos não indica cana em solos arenosos nesses municípios, mas ${n0(tx.me)}% dela está em textura média; o problema tende a se concentrar em manchas arenosas pequenas demais para a escala do mapa (1:5.000.000).` : ` Nesses municípios, ${n0(tx.ar)}% da cana mapeada está em solos arenosos e ${n0(tx.me)}% em textura média.`;
+      p2.push(t + ' As usinas apontam a necessidade de variedades adaptadas a esses solos.'); }
+    // manejo, produtividade, mix e preços: só o que é novo; a planilha entra para confirmar ou explicar
+    const p3 = [], va = um1('variedades'), tc = um1('tch'), mx = um1('mix'), ps = um1('precoSent');
+    if (va) p3.push(`As usinas trabalham com cerca de ${va.n} variedades por safra e substituem as menos produtivas a cada ano.`);
+    const tchR = usR.length ? (() => { let a = 0, p = 0; for (const u of usR) { const k = ['a3', 'a2', 'a1'].find(x => u.periodos[x].temArea); if (!k) continue; const P = u.periodos[k]; for (const pf of ['p', 'f']) for (const [c, ar] of Object.entries(P.area[pf])) { const t = P.tch[pf][c]; if (ar > 0 && t > 0) { a += ar; p += ar * t; } } } return a ? p / a : null; })() : null;
+    if (tc) { const d = tchR ? tc.v / tchR - 1 : 0; p3.push(`A produtividade média da região gira em torno de ${n0(tc.v)} toneladas por hectare${!tchR ? '' : Math.abs(d) <= .06 ? `, semelhante à ${passadaDa}` : `, ${d > 0 ? 'acima' : 'abaixo'} ${passadaDa} (${n0(tchR)} t/ha)${Math.abs(d) > .15 ? '; a diferença é grande e deve ser confirmada' : ''}`}.`); }
+    const mixR = usR.length ? (() => { let ac = 0, tot = 0; for (const u of usR) { const k = ['a3', 'a2', 'a1'].find(x => u.periodos[x].temProd); if (!k) continue; const P = u.periodos[k]; const a = (P.acucar || 0) * ATR_ACUCAR, e = (P.anidro || 0) * ATR_ANIDRO + (P.hidratado || 0) * ATR_HIDRATADO; ac += a; tot += a + e; } return tot ? 100 * ac / tot : null; })() : null;
+    const sa = ps ? ((rel.texto.match(/de ([^.,;]{4,40}?) para o açúcar/i) || [])[1] || ps.acucar).trim() : null, se = ps ? ((rel.texto.match(/de ([^.,;]{4,40}?) para o etanol/i) || [])[1] || ps.etanol || '').trim() : null;
+    if (mx) { let t = `O mix previsto é de ${mx.acucar}% para o açúcar e ${100 - mx.acucar}% para o etanol`;
+      if (mixR != null && mx.acucar - mixR >= 5) t += `, mais açucareiro que ${passada} (${n0(mixR)}% do ATR nessas usinas)${ps && /insatisf/i.test(sa) ? `, embora o sentimento das usinas em relação ao preço do açúcar seja de ${sa}. Como as duas informações apontam em direções opostas, é provável que o percentual citado se refira ao volume de produtos, e não ao ATR; o dado deve ser confirmado` : '. A diferença pode vir da base de cálculo (volume ou ATR) ou de uma mudança de estratégia'}`;
+      else if (mixR != null && mixR - mx.acucar >= 5) t += `, mais alcooleiro que ${passada} (${n0(mixR)}% do ATR para o açúcar)`;
+      p3.push(t + '.'); if (ps && !(mixR != null && mx.acucar - mixR >= 5 && /insatisf/i.test(sa))) p3.push(`Quanto ao preço, o sentimento é de ${sa} para o açúcar${se ? ` e de ${se} para o etanol` : ''}.`); }
+    else if (ps) p3.push(`Quanto ao preço, o sentimento é de ${sa} para o açúcar${se ? ` e de ${se} para o etanol` : ''}.`);
+    // etanol de milho, biomassa e sorgo
+    const p4 = [], mc = um1('milhoCompra'), ct = um1('milhoContrato'), sb = um1('siloBag'), es = um1('estoque'), cv = um1('cavaco'), so = um1('sorgoPct');
+    if (mc || ct || es) { let t = 'Nas usinas de etanol de milho'; t += mc ? `, cerca de ${mc.pct}% do milho necessário para a safra já estava comprado` : ', a compra do milho segue em andamento';
+      if (ct) t += `, de ${ct.min}% a ${ct.max}% por contratos futuros e o restante no mercado à vista`; if (um1('milhoOrigem')) t += '; metade vem diretamente de produtores e metade de cooperativas'; t += '.';
+      if (sb) t += ` Até ${sb.pct}% do volume fica em silos-bolsa.`; if (es) t += ` O estoque garante ${es.min === es.max ? es.min : `de ${es.min} a ${es.max}`} meses de produção.`;
+      const dem = R?.atualMilho?.milho; if (mc && dem) { const falta = dem * (1 - mc.pct / 100); t += ` Na escala de consumo das usinas, isso significa que ainda ${mc.pct >= 50 ? 'restam' : 'faltavam'} cerca de ${miT(falta)} por comprar, volume ligado diretamente à colheita do milho de segunda safra.`; }
+      p4.push(t); }
+    if (cv) { const eu = soloClasse('Eucalipto', null)?.area; p4.push(`A principal fonte de energia dessas usinas é o cavaco de madeira${cv.celulose ? ', o que as coloca em disputa por madeira com as novas fábricas de celulose' : ''}${eu ? `; o estado tem ${haTxt(eu)} de eucalipto mapeados, base para os dois usos` : ''}. Mesmo assim, as usinas veem o cenário como promissor e sinalizam novos investimentos.`); }
+    if (so) { const sa2 = soloClasse('Sorgo', null)?.area; p4.push(`O sorgo entra no máximo com ${so.pct}% do volume, e só nas usinas mais novas, por exigir adaptações nos equipamentos. A expansão do sorgo no estado${sa2 ? ` (${haTxt(sa2)} mapeados na segunda safra de 2025)` : ''} responde mais à janela de plantio do produtor que à demanda das usinas.`); }
+    for (const p of [p1, p2, p3, p4]) if (p.length) out.push(p.join(' '));
+  }
+  return out;
+  function i1ok(a, m) { return new Date(a, m + 1, 0, 12) < HOJE && typeof climaDiario === 'function'; }
+}
+// ---------- gráficos da cana ----------
+function graficoRevisoesPDF(doc, rv, ctx) {   // três painéis: moagem, produtividade, ATR, por etapa
+  const {M, W, CINZA} = ctx; if (!rv) return; ctx.garantir(48); const y0 = ctx.y() + 2, gh = 26, gap = 8, pw = (W - 2 * M - 2 * gap) / 3;
+  const ks = ['ant', 'a1', 'a2', 'a3'], rot = ['Safra ant.', '1ª aval.', '2ª aval.', '3ª aval.'];
+  const pain = [['Moagem (milhões de t)', k => rv[k].moida / 1000, 1], ['Produtividade (t/ha)', k => rv[k].tch, 0], ['ATR (kg/t)', k => rv[k].atr, 1]];
+  pain.forEach(([tit, f, dec], i) => { const x0 = M + i * (pw + gap), vs = ks.map(f), ok = vs.filter(v => v != null); if (!ok.length) return; const mn = Math.min(...ok) * .9, mx = Math.max(...ok) * 1.02, bw = pw / 4 * .62;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5); doc.setTextColor(38, 44, 36); doc.text(tit, x0, y0);
+    vs.forEach((v, j) => { if (v == null) return; const xc = x0 + (j + .5) * pw / 4, h = gh * (v - mn) / (mx - mn); doc.setFillColor(...(j ? [47, 107, 58] : [190, 190, 182])); doc.rect(xc - bw / 2, y0 + 3 + gh - h, bw, h, 'F');
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(6.3); doc.setTextColor(38, 44, 36); doc.text(v.toLocaleString('pt-BR', {minimumFractionDigits: dec, maximumFractionDigits: dec}), xc, y0 + 2 + gh - h, {align: 'center'});
+      doc.setTextColor(...CINZA); doc.text(rot[j], xc, y0 + gh + 6.5, {align: 'center'}); }); });
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.setTextColor(...CINZA); doc.text(`Mesmas ${rv.n} usinas em todas as etapas. Barras começam acima de zero para destacar a variação.`, M, y0 + gh + 11); ctx.setY(y0 + gh + 16);
+}
+function graficoChuvaUsinasPDF(doc, C, ctx) {   // chuva ocorrida × média histórica, por mês
+  const {M, W, CINZA} = ctx; if (!C?.meses?.length) return; ctx.garantir(44); const y0 = ctx.y() + 2, gh = 26, gx = M + 8, gw = W - 2 * M - 10, n = C.meses.length, cw = gw / n, bw = cw * .32;
+  const mx = Math.max(...C.meses.map(m => Math.max(m.o, m.h))) * 1.1, Y = v => y0 + gh - v / mx * gh;
+  doc.setDrawColor(232); doc.setLineWidth(.15); doc.line(gx, y0 + gh, gx + gw, y0 + gh);
+  C.meses.forEach((m, j) => { const xc = gx + (j + .5) * cw; doc.setFillColor(200, 200, 192); doc.rect(xc - bw - .3, Y(m.h), bw, y0 + gh - Y(m.h), 'F'); doc.setFillColor(...(m.o < m.h * .7 ? [196, 120, 60] : m.o > m.h * 1.3 ? [33, 113, 181] : [110, 160, 210])); doc.rect(xc + .3, Y(m.o), bw, y0 + gh - Y(m.o), 'F');
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(6.3); doc.setTextColor(...CINZA); doc.text(MESES_EXT[m.i].slice(0, 3), xc, y0 + gh + 3.5, {align: 'center'}); const d = (m.o - m.h) / m.h * 100; doc.setTextColor(38, 44, 36); doc.text(`${d > 0 ? '+' : ''}${n0(d)}%`, xc, Y(Math.max(m.o, m.h)) - 1, {align: 'center'}); });
+  legendaPDF(doc, [['b', [200, 200, 192], 'média histórica'], ['b', [110, 160, 210], 'chuva ocorrida (mm)'], ['b', [196, 120, 60], 'mais de 30% abaixo'], ['b', [33, 113, 181], 'mais de 30% acima']], gx, y0 + gh + 8, CINZA); ctx.setY(y0 + gh + 13);
+}
+function graficoIdadePDF(doc, I, ctx) {   // área por idade (barras) e produtividade própria × fornecedor (linhas)
+  const {M, W, CINZA} = ctx; if (!I) return; ctx.garantir(50); const y0 = ctx.y() + 2, gh = 30, gx = M + 8, gw = W - 2 * M - 16, n = I.g.length, cw = gw / n, bw = cw * .5;
+  const mxA = Math.max(...I.g.map(g => g.pct)) * 1.15, tchs = I.g.flatMap(g => [g.tchP, g.tchF]).filter(Boolean), mxT = Math.max(...tchs) * 1.1, YT = v => y0 + gh - v / mxT * gh;
+  I.g.forEach((g, j) => { const xc = gx + (j + .5) * cw, h = gh * g.pct / mxA; doc.setFillColor(214, 226, 208); doc.rect(xc - bw / 2, y0 + gh - h, bw, h, 'F'); doc.setFont('helvetica', 'normal'); doc.setFontSize(6.3);
+    doc.setTextColor(...CINZA); doc.text(g.nome, xc, y0 + gh + 3.5, {align: 'center'}); doc.setTextColor(90, 110, 85); doc.text(`${n0(g.pct)}% da área`, xc, y0 + gh + 6.6, {align: 'center'}); });
+  const linha = (k, cor, dash) => { doc.setDrawColor(...cor); doc.setLineWidth(.8); if (dash) doc.setLineDashPattern([1.2, .8], 0); let ant = null; I.g.forEach((g, j) => { const v = g[k]; if (!v) { ant = null; return; } const p = [gx + (j + .5) * cw, YT(v)]; if (ant) doc.line(...ant, ...p); doc.setFillColor(...cor); doc.circle(...p, .7, 'F'); ant = p; }); doc.setLineDashPattern([], 0); };
+  linha('tchP', [47, 107, 58]); linha('tchF', [184, 116, 26], true);
+  I.g.forEach((g, j) => { if (g.tchP) { doc.setFontSize(6.3); doc.setTextColor(47, 107, 58); doc.text(n0(g.tchP), gx + (j + .5) * cw + 1.3, YT(g.tchP) - 1); } });
+  legendaPDF(doc, [['b', [214, 226, 208], '% da área do canavial'], ['l', [47, 107, 58], 'produtividade, cana própria (t/ha)'], ['t', [184, 116, 26], 'produtividade, fornecedores (t/ha)']], gx, y0 + gh + 11.5, CINZA); ctx.setY(y0 + gh + 16);
+}
+function graficoEtanolPDF(doc, R, ctx) {   // etanol por origem: safra anterior × atual (mesmas usinas)
+  const {M, W, CINZA} = ctx, cP = R.compProd, cM = R.compMilho; if (!cP.n && !cM.n) return; ctx.garantir(40); const y0 = ctx.y() + 2, gx = M + 26, gw = W - 2 * M - 40, bh = 7;
+  const lin = [['Safra anterior', cP.ant, cM.ant], ['Safra atual', cP.atu, cM.atu]], mx = Math.max(...lin.map(([, p, m]) => p.anidro + p.hidratado + m.etanolMilho)) * 1.05;
+  const cores = [[47, 107, 58], [140, 185, 120], [232, 170, 60]];
+  lin.forEach(([nome, p, m], j) => { const yy = y0 + j * (bh + 5); let x = gx; doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(38, 44, 36); doc.text(nome, M, yy + bh * .7);
+    [p.anidro, p.hidratado, m.etanolMilho].forEach((v, k) => { const w = gw * v / mx; doc.setFillColor(...cores[k]); doc.rect(x, yy, w, bh, 'F'); if (w > 14) { doc.setFontSize(6.5); doc.setTextColor(k === 1 ? 38 : 255, k === 1 ? 44 : 255, k === 1 ? 36 : 255); doc.text(`${n2(v / 1e6)}`, x + w / 2, yy + bh * .68, {align: 'center'}); } x += w; });
+    doc.setFontSize(7.5); doc.setTextColor(38, 44, 36); doc.text(`${n2((p.anidro + p.hidratado + m.etanolMilho) / 1e6)} bi L`, x + 2, yy + bh * .7); });
+  legendaPDF(doc, [['b', cores[0], 'anidro de cana'], ['b', cores[1], 'hidratado de cana'], ['b', cores[2], 'etanol de milho']], gx, y0 + 2 * (bh + 5) + 4, CINZA);
+  doc.setFontSize(6.5); doc.setTextColor(...CINZA); doc.text(`Bilhões de litros; mesmas usinas nos dois anos (${cP.n} de cana e ${cM.n} de milho).`, gx, y0 + 2 * (bh + 5) + 8.5); ctx.setY(y0 + 2 * (bh + 5) + 13);
+}
+
+// =====================================================================
 // RESUMO DA SAFRA (PDF) — texto corrido, em ordem cronológica, com dois gráficos por cultura
 // (semeadura semana a semana e restrição hídrica no período); tabelas de apoio vão para o anexo
 // =====================================================================
@@ -1761,7 +2230,7 @@ const pdfTxt = t => String(t ?? '').replace(/<[^>]+>/g, '').replace(/&lt;/g, '<'
 const MESES_EXT = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
 const dExt = d => d ? `${d.getDate() === 1 ? '1º' : d.getDate()} de ${MESES_EXT[d.getMonth()]}` : '';
 const lista = a => a.length <= 1 ? (a[0] || '') : a.slice(0, -1).join(', ') + ' e ' + a.at(-1);
-const haTxt = v => v >= 1e6 ? `${n1(v / 1e6)} ${v >= 2e6 ? 'milhões' : 'milhão'} de hectares` : v >= 1e4 ? `${n0(v / 1e3)} mil hectares` : v >= 1e3 ? `${n1(v / 1e3)} mil hectares` : `${n0(v)} hectares`;
+const haTxt = v => v >= 1e6 ? `${n1(v / 1e6)} ${v >= 1.95e6 ? 'milhões' : 'milhão'} de hectares` : v >= 1e4 ? `${n0(v / 1e3)} mil hectares` : v >= 1e3 ? `${n1(v / 1e3)} mil hectares` : `${n0(v)} hectares`;
 const nmMun = cd => MUN_IDX[cd]?.properties.NM_MUN;
 const maiusc = t => t ? t[0].toUpperCase() + t.slice(1) : t;
 const safraAnterior = s => { const m = /^(\d{4})\/(\d{2})$/.exec(s || ''); return m ? `${+m[1] - 1}/${m[1].slice(2)}` : null; };
@@ -1873,7 +2342,7 @@ function prosaRelatos(cid, filtro) {
     else if (pz) p2.push(`A expectativa é concluir o plantio até ${dExt(pz.data)}.`);
     const cj = (cl.has('excesso') || cl.has('falta')) && CL ? climaJanela(escp, rel.data, 30) : null;
     if (cj) { const umid = pg.some(f => f.itens.some(x => /lesma|caramujo|mofo|antracnose|ferrugem/.test(x)));
-      if (cl.has('excesso')) p2.push(cj.p > cj.e * 1.2 || cj.dch >= 12 || cj.maxSeq >= 4 ? `O clima confirma o relato: nos 30 dias anteriores à viagem choveu ${n0(cj.p)} mm, ${cj.dch >= cj.dias ? 'com chuva todos os dias' : `com chuva em ${cj.dch} dos ${cj.dias} dias`}${umid ? ', ambiente úmido que favorece lesmas, caramujos e doenças, como relatado' : ''}.` : `O clima, no entanto, não mostra chuva fora do normal nos 30 dias anteriores (${n0(cj.p)} mm), o que sugere excesso localizado ou concentrado em poucos dias.`);
+      if (cl.has('excesso')) p2.push(cj.p > cj.e * 1.2 || cj.dch >= 12 || cj.maxSeq >= 4 ? `O clima confirma o relato: nos 30 dias anteriores à viagem, ${cj.dch >= cj.dias ? 'choveu todos os dias' : `choveu em ${cj.dch} dos ${cj.dias} dias`}${umid ? ', ambiente úmido que favorece lesmas, caramujos e doenças, como relatado' : ''}.` : `O clima, no entanto, não mostra chuva fora do normal nos 30 dias anteriores (${n0(cj.p)} mm), o que sugere excesso localizado ou concentrado em poucos dias.`);
       else p2.push(cj.p - cj.e < -30 || cj.dch <= 4 ? `O clima confirma o relato: nos 30 dias anteriores choveu só ${n0(cj.p)} mm, para uma demanda de ${n0(cj.e)} mm.` : `O clima, porém, indica ${n0(cj.p)} mm nos 30 dias anteriores; a falta de água pode ser localizada.`); }
     for (const f of um('conversao')) if (f.escopo.length === 1) { const cd = f.escopo[0], eu = soloClasse('Eucalipto', cd)?.area, sj = soloCultura(cid, cd)?.area;
       if (eu || sj) p2.push(`${nmMun(cd)} tem hoje cerca de ${eu ? `${haTxt(eu)} de eucalipto` : 'pouca área de eucalipto'}${sj ? ` e ${haTxt(sj)} de ${nomeC}` : ''}${sj && f.max ? `; a troca relatada corresponderia a ${n0(100 * f.min / sj)}%${f.max !== f.min ? ` a ${n0(100 * f.max / sj)}%` : ''} da área de ${nomeC} do município, algo a acompanhar nas próximas safras` : ''}.`); }
@@ -1950,7 +2419,7 @@ async function analisePDFCultura(c, s, n, ini, fim, dias, opts) {
   a.txtFrente = fr2.join(' '); a.crit3 = crit3;
   // --- campo
   const noP = r => r.data >= ini && r.data <= addD(fim, 1);
-  a.fts = FOTOS.filter(p => p.cult === cid && p.data >= ini && p.data <= addD(fim, 1)); a.rels = RELATOS.filter(r => r.cults.has(cid) && noP(r));
+  a.rels = RELATOS.filter(r => r.cults.has(cid) && noP(r));
   a.prosa = opts.campo ? prosaRelatos(cid, noP) : [];
   // frase-resumo para a primeira página
   let m = ult ? `A ${nomeC} chegou a ${n0(ult.pl)}% da área semeada${a.destAnt ? `, ${a.destAnt}` : ''}${a.dFim ? ` e, no ritmo atual, deve alcançar ${a.alvo}% por volta de ${dExt(a.dFim)}` : ''}` : `A semeadura de ${nomeC} ainda não começou`;
@@ -1967,10 +2436,18 @@ async function analisePDFCana(ini, fim, dias, opts) {
   if (opts.clima) { const dc = await climaDiario(addD(ini, -30), addD(HOJE, 16)); a.serie = serieDias(dc, pesos, ini, fim < HOJE ? fim : addD(HOJE, -1));
     a.R = restricaoPeriodo(c, 'cana', ini, dc).filter(x => deISO(x.d) <= addD(fim > HOJE ? fim : HOJE, 15)); a.agua = historiaAgua(a.R, () => 0, 'cana', true);
     if (a.serie.length) { const p = a.serie.reduce((t, x) => t + x.p, 0), e = a.serie.reduce((t, x) => t + x.e, 0); a.chuvaTot = p; a.txtTempo = `${historiaTempo(a.serie)} No balanço do período, choveu ${n0(p)} mm nos canaviais, ${p > e * 1.15 ? 'mais do que' : p < e * .85 ? 'menos do que' : 'praticamente o mesmo que'} o solo e as plantas perderam por evaporação (${n0(e)} mm).`; } }
-  const noP = r => r.data >= ini && r.data <= addD(fim, 1); a.rels = RELATOS.filter(r => r.cults.has('cana') && noP(r)); a.fts = FOTOS.filter(p => p.cult === 'cana' && p.data >= ini && p.data <= addD(fim, 1));
-  a.prosa = opts.campo ? prosaRelatos('cana', noP) : []; a.sc = soloCultura('cana', null); a.rc = opts.clima ? resumoClima(dias, pesos) : null;
+  // relatos de cana: os do período ou, se não houver, os dos últimos seis meses (o levantamento de cana é menos frequente)
+  const noP = r => r.data >= ini && r.data <= addD(fim, 1), recente = r => r.data >= addD(fim < HOJE ? fim : HOJE, -200) && r.data <= addD(fim, 1);
+  const relCana = RELATOS.filter(r => r.grupo === 'cana'), filtroC = relCana.some(noP) ? noP : recente;
+  a.rels = RELATOS.filter(r => r.cults.has('cana') && (r.grupo === 'cana' ? filtroC(r) : noP(r)));
+  a.U = USINAS?.R || null; a.UT = a.U?.textos || null; a.Uav = USINAS?.avisos || [];
+  a.prosa = opts.campo ? [...await prosaRelatosCana(filtroC, a.U), ...prosaRelatos('cana', r => noP(r) && r.grupo !== 'cana')] : [];
+  a.sc = soloCultura('cana', null); a.rc = opts.clima ? resumoClima(dias, pesos) : null;
   const hoje = a.R?.filter(x => !x.prev && x.r != null).at(-1);
-  a.manchete = `Nos ${haTxt(a.area)} de cana mapeados, ${hoje ? (hoje.r >= 5 ? `${n0(hoje.r)}% dos canaviais estão hoje com falta de água` : 'a água do solo atende hoje praticamente todos os canaviais') : 'a água no solo não pôde ser avaliada'}${hoje?.r >= 5 && a.agua?.pico?.r >= hoje.r + 10 ? `; no pior momento do período, em ${dExt(deISO(a.agua.pico.d))}, essa parcela chegou a ${n0(a.agua.pico.r)}%` : a.agua?.dest ? `; ${a.agua.dest}` : ''}.`;
+  const U = a.U; let mU = '';
+  if (U?.atual?.moida) { const vM = varPct(U.compCana.ant.moida, U.compCana.atu.moida), etT = (U.atualProd.etanol || 0) + (U.atualMilho.etanolMilho || 0);
+    const encU = safraEncerrada(U.safra); mU = `${encU ? `Na safra ${U.safra}, encerrada em março, as usinas moeram cerca de ${miT(U.atual.moida)} de cana` : `As usinas estimam moer ${miT(U.atual.moida)} de cana na safra ${U.safra}`}${vM != null && U.compCana.n >= 3 ? ` (${Math.abs(vM) < 1 ? 'estável' : `${n0(Math.abs(vM))}% ${vM > 0 ? 'a mais' : 'a menos'}`} que na safra anterior, nas mesmas usinas)` : ''} e ${encU ? 'produziram' : 'produzir'} ${litros(etT)} de etanol, ${U.atualMilho.etanolMilho ? `${n0(100 * U.atualMilho.etanolMilho / etT)}% deles a partir do milho` : 'todos de cana'}. `; }
+  a.manchete = mU + `Nos ${haTxt(a.area)} de cana mapeados, ${hoje ? (hoje.r >= 5 ? `${n0(hoje.r)}% dos canaviais estão hoje com falta de água` : 'a água do solo atende hoje praticamente todos os canaviais') : 'a água no solo não pôde ser avaliada'}${hoje?.r >= 5 && a.agua?.pico?.r >= hoje.r + 10 ? `; no pior momento do período, em ${dExt(deISO(a.agua.pico.d))}, essa parcela chegou a ${n0(a.agua.pico.r)}%` : a.agua?.dest ? `; ${a.agua.dest}` : ''}.`;
   return a;
 }
 // estado da água no solo hoje (balanço FAO-56 por município) — tabela do anexo
@@ -2045,7 +2522,7 @@ async function gerarPDF(ini, fim, sel, opts) {
   const linhaSub = t => { doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(...CINZA); const ls = doc.splitTextToSize(pdfTxt(t), W - 2 * M); doc.text(ls, M, y); y += ls.length * 4.2 + 3; };
   const h2 = t => { garantir(18); y += 2; doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(...VERDE); doc.text(pdfTxt(t), M, y); y += 5.5; };
   const txt = (t, tam = 10.5, cor = TINTA) => { if (!t) return; doc.setFont('times', 'normal'); doc.setFontSize(tam); doc.setTextColor(...cor); const lh = tam * .47;
-    for (const l of doc.splitTextToSize(pdfTxt(t), W - 2 * M)) { garantir(lh); doc.text(l, M, y); y += lh; } y += 2.6; };
+    for (const l of doc.splitTextToSize(pdfTxt(t), W - 2 * M)) { garantir(lh); doc.setFont('times', 'normal'); doc.setFontSize(tam); doc.setTextColor(...cor); doc.text(l, M, y); y += lh; } y += 2.6; };
   const destaque = t => { if (!t) return; doc.setFont('times', 'italic'); doc.setFontSize(10.5); const ls = doc.splitTextToSize(pdfTxt(t), W - 2 * M - 6), lh = 4.9; garantir(ls.length * lh + 2);
     doc.setDrawColor(...VERDE); doc.setLineWidth(.6); doc.line(M, y - 3.4, M, y - 3.4 + ls.length * lh); doc.setTextColor(...TINTA); ls.forEach((l, i) => doc.text(l, M + 5, y + i * lh)); y += ls.length * lh + 3; };
   const nota = t => { doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(...CINZA); const ls = doc.splitTextToSize(pdfTxt(t), W - 2 * M); garantir(ls.length * 3); doc.text(ls, M, y); y += ls.length * 3 + 2; };
@@ -2077,22 +2554,28 @@ async function gerarPDF(ini, fim, sel, opts) {
   y += 2;
   for (const a of A) { garantir(24); doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(...TINTA); doc.text(pdfTxt(a.n), M, y); y += 4.5;
     const hj = a.R?.filter(x => !x.prev && x.r != null).at(-1);
-    numeros(a.cana ? [[haTxt(a.area).replace(' de hectares', ' ha').replace(' hectares', ' ha'), 'mapeados (Aprosoja-MS)'], [hj ? n0(hj.r) + '%' : '—', 'dos canaviais com falta de água hoje'], [a.chuvaTot != null ? n0(a.chuvaTot) + ' mm' : '—', 'de chuva no período']]
+    numeros(a.cana ? [...(a.U?.atual?.moida ? [[`${n1(a.U.atual.moida / 1000)} mi t`, `de cana a moer (safra ${a.U.safra})`], [`${n2(((a.U.atualProd.etanol || 0) + (a.U.atualMilho.etanolMilho || 0)) / 1e6)} bi L`, 'de etanol (cana e milho)']] : [[haTxt(a.area).replace(' de hectares', ' ha').replace(' hectares', ' ha'), 'mapeados (Aprosoja-MS)']]), [hj ? n0(hj.r) + '%' : '—', 'dos canaviais com falta de água hoje'], [a.chuvaTot != null ? n0(a.chuvaTot) + ' mm' : '—', 'de chuva no período']]
       : [[a.jUlt ? n0(a.sem[a.jUlt - 1].pl) + '%' : '—', `semeado (${a.jUlt ? fmtD(a.sem[a.jUlt - 1].d).slice(0, 5) : ''})`], [a.pa && a.pb ? '+' + n0(a.pb.v - a.pa.v) : '—', 'pontos percentuais de avanço no período'], [hj ? n0(hj.r) + '%' : '—', 'da área cultivada com falta de água hoje'], [a.chuvaTot != null ? n0(a.chuvaTot) + ' mm' : '—', 'de chuva no período']]); }
   nota('Números do estado ponderados pela área de cada cultura. Semeadura: planilha semanal da SEGEO-MS. Clima: reanálise ERA5 e modelos numéricos (Open-Meteo), com evapotranspiração ajustada pelas estações do INMET. Falta de água: balanço hídrico do solo por município (FAO-56). Dados preliminares, sujeitos a revisão; associações entre indicadores não implicam causa.');
   // ---------- uma seção por cultura ----------
   for (const a of A) {
-    novaPag(); doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...VERDE); doc.text(a.cana ? 'CANA-DE-AÇÚCAR · ÁREA MAPEADA 2025/26' : `SAFRA ${a.s}`, M, y); y += 8;
+    novaPag(); doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...VERDE); doc.text(a.cana ? 'CANA-DE-AÇÚCAR E BIOENERGIA' : `SAFRA ${a.s}`, M, y); y += 8;
     h1(a.cana ? 'Cana-de-açúcar' : a.n.replace(/ \(.*\)$/, ''));
     linhaSub(a.cana ? `${haTxt(a.area)} em ${a.nMun} municípios` : `${a.area ? haTxt(a.area) + ' em' : 'Presente em'} ${a.nMun} municípios`);
-    if (a.cana) { h2('Onde está a cana'); txt(a.txtArea); }
+    if (a.cana) { h2('Onde está a cana'); txt(a.txtArea);
+      const U = a.U, UT = a.UT;
+      if (UT) { if (UT.safra) { h2(`A safra ${U.safra} nas usinas`); txt(UT.safra[0]); txt(UT.safra[1]); graficoRevisoesPDF(doc, UT.rev, ctx); if (UT.safra[2]) { txt(UT.safra[2]); graficoChuvaUsinasPDF(doc, U.chuva, ctx); } }
+        if (UT.canavial) { h2('O canavial: idade, renovação e produtividade'); txt(UT.canavial[0]); graficoIdadePDF(doc, idadeResumo(U.atualArea), ctx); UT.canavial.slice(1).forEach(p => txt(p)); }
+        if (UT.produtos) { h2('Açúcar, etanol e energia'); UT.produtos.forEach(p => txt(p)); }
+        if (UT.milho) { h2('Etanol de milho'); UT.milho.forEach(p => txt(p)); graficoEtanolPDF(doc, U, ctx); }
+        if (UT.polos) { h2('Os polos produtores'); UT.polos.forEach(p => txt(p)); }
+        if (UT.industria) { h2('A indústria'); UT.industria.forEach(p => txt(p)); } } }
     else { h2('Como andou a semeadura'); txt(a.txtPlantio); graficoSemeaduraPDF(doc, a, ctx); }
     if (opts.clima && (a.txtTempo || a.R)) { h2('O tempo e a água no solo'); txt(a.txtTempo); txt(a.agua?.txt);
       if (a.R) graficoRestricaoPDF(doc, a, ctx); destaque(a.agua?.efeito); }
     if (!a.cana && a.txtFrente) { h2('O que vem pela frente'); txt(a.txtFrente); }
-    if (opts.campo && (a.prosa.length || a.fts.length || a.rels.length)) { h2('O que o campo contou'); a.prosa.forEach(p => txt(p));
-      if (!a.prosa.length && a.rels.length) txt(`${a.rels.length === 1 ? 'A cultura foi citada em uma viagem a campo' : `A cultura foi citada em ${a.rels.length} viagens a campo`} no período, sem informações quantitativas.`);
-      if (a.fts.length) { const pm = {}; a.fts.forEach(p => { const k = p.mun ? p.mun.properties.NM_MUN : null; if (k) pm[k] = (pm[k] || 0) + 1; }); txt(`A equipe registrou ${a.fts.length} foto${a.fts.length === 1 ? '' : 's'} da cultura no período${Object.keys(pm).length ? `, em ${lista(Object.keys(pm).slice(0, 6))}` : ''}.`); } }
+    if (opts.campo && (a.prosa.length || a.rels.length)) { h2('Levantamento de campo'); a.prosa.forEach(p => txt(p));
+      if (!a.prosa.length && a.rels.length) txt(`${a.rels.length === 1 ? 'A cultura foi citada em uma viagem a campo' : `A cultura foi citada em ${a.rels.length} viagens a campo`} no período, sem informações quantitativas.`); }
   }
   if (outras.length) { novaPag(); doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...VERDE); doc.text('RELATÓRIOS DE VIAGEM', M, y); y += 8; h1('Outras culturas no campo');
     linhaSub('O que as viagens a campo do período mostraram sobre outras culturas.');
@@ -2101,7 +2584,16 @@ async function gerarPDF(ini, fim, sel, opts) {
   novaPag(); doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...VERDE); doc.text('ANEXO', M, y); y += 8; h1('Tabelas de apoio'); y += 2;
   tabela(['Cultura', 'Área (ha)', 'Municípios', 'Semeado no início do período', 'Semeado no fim do período', 'Em fase crítica no fim do período'], A.map(a => a.cana ? [a.n + ' (mapeada)', n0(a.area), a.nMun, '—', '—', '—'] : [`${a.n} (${a.s})`, a.area ? n0(a.area) : '—', a.nMun, a.pa ? n0(a.pa.v) + '%' : '—', a.pb ? n0(a.pb.v) + '%' : '—', a.crb ? n0(a.crb.v) + '%' : '—']));
   for (const a of A) { h2(a.n);
-    if (a.cana) tabela(['Região imediata', 'Área (ha)', '% da cana'], a.regs.map(([r, v]) => [r, n0(v), n1(100 * v / a.area) + '%']));
+    if (a.cana) { tabela(['Região imediata', 'Área mapeada (ha)', '% da cana'], a.regs.map(([r, v]) => [r, n0(v), n1(100 * v / a.area) + '%']));
+      const U = a.U; if (U) { sub2(`Planilhas das usinas, safra ${U.safra}`);
+        tabela(['Polo', 'Usinas', 'Moagem (mil t)', 'Var. mesmas usinas', 'TCH (t/ha)', 'ATR (kg/t)', 'Açúcar no mix (ATR)', 'Chuva jan-jul x média', 'Área informada (ha)', 'Área mapeada (ha)'],
+          U.polos.map(p => [p.polo, p.atual.n, n0(p.atual.moida), p.comp.n ? sinal(varPct(p.comp.ant.moida, p.comp.atu.moida)) : '—', p.area.tch ? n1(p.area.tch) : '—', p.atual.atr ? n1(p.atual.atr) : '—', p.prod.mix != null ? n0(100 * p.prod.mix) + '%' : '—', p.chuva?.desvio != null ? sinal(100 * p.chuva.desvio) : '—', n0(p.area.areaT), U.mapa ? n0(U.mapa[p.polo] || 0) : '—']), {styles: {font: 'helvetica', fontSize: 7, cellPadding: 1, textColor: TINTA, lineColor: [228, 228, 222], lineWidth: {bottom: .1}}});
+        const rv = a.UT?.rev; if (rv) tabela(['Etapa (mesmas ' + rv.n + ' usinas)', 'Moagem (mil t)', 'Produtividade (t/ha)', 'ATR (kg/t)'], ['ant', 'a1', 'a2', 'a3'].map(k => [nomePer[k], n0(rv[k].moida), rv[k].tch ? n1(rv[k].tch) : '—', rv[k].atr ? n1(rv[k].atr) : '—']), {tableWidth: 140});
+        const cP = U.compProd, cM = U.compMilho, cE = U.compEnergia, lin = (nome, x, y, f = v => n0(v)) => [nome, x ? f(x) : '—', y ? f(y) : '—', x && y ? sinal(varPct(x, y)) : '—'];
+        tabela(['Produção (mesmas usinas nos dois anos)', 'Safra anterior', 'Safra atual', 'Variação'], [lin('Cana moída (mil t)', U.compCana.ant.moida, U.compCana.atu.moida), lin('Açúcar (mil t)', cP.ant.acucar / 1e3, cP.atu.acucar / 1e3), lin('Etanol anidro de cana (milhões de litros)', cP.ant.anidro / 1e3, cP.atu.anidro / 1e3), lin('Etanol hidratado de cana (milhões de litros)', cP.ant.hidratado / 1e3, cP.atu.hidratado / 1e3),
+          lin('Milho moído (mil t)', cM.ant.milho, cM.atu.milho), lin('Etanol de milho (milhões de litros)', cM.ant.etanolMilho / 1e3, cM.atu.etanolMilho / 1e3), lin('DDG (mil t)', cM.ant.ddg, cM.atu.ddg), lin('Energia vendida (mil MWh)', cE.ant.venda / 1e3, cE.atu.venda / 1e3)], {tableWidth: 150});
+        nota(`Estimativa atual = avaliação mais recente preenchida por cada usina. Comparações com a safra anterior usam só as usinas que informaram os dois anos (${U.compCana.n} de cana; ${U.compMilho.n} de milho). Mix em ATR com fatores Consecana (1,0495 kg de ATR por kg de açúcar; 1,7651 e 1,6913 kg por litro de etanol anidro e hidratado). Polos: Centro-Sul (regiões de Dourados, Ponta Porã e Campo Grande), Vale do Ivinhema (Nova Andradina e Naviraí-Mundo Novo) e Norte e Bolsão (Coxim, Paranaíba-Chapadão do Sul-Cassilândia e Três Lagoas). Dados de cada usina não são divulgados.`);
+        if (a.Uav.length) { sub2('Checagem das planilhas'); const gr = {}; a.Uav.forEach(t => { const m = t.match(/^([A-Z]{2}-\d+): (.*)$/); if (m) (gr[m[1]] ??= []).push(m[2].replace(/\.$/, '')); }); nota('Ajustes feitos automaticamente na leitura, por código de questionário (dados de cada usina não são divulgados). ' + Object.entries(gr).map(([c, l]) => `${c}: ${l.join('; ')}.`).join(' ')); } } }
     else tabela(['Região imediata', 'Municípios', 'Área (ha)', 'Semeado no início do período', 'Semeado no fim do período', 'Em fase crítica no fim do período'], a.regs.map(r => [r.r, r.n, n0(r.area), n0(r.a) + '%', n0(r.b) + '%', n0(r.k) + '%']));
     if (a.sc) tabela(['Textura do solo nas áreas da cultura', '% da área', 'Classe de solo', '% da área'], (() => { const t = Object.entries(a.sc.textura).sort((x, y) => y[1] - x[1]), o = Object.entries(a.sc.ordem).sort((x, y) => y[1] - x[1]).filter(([, v]) => v >= .1);
       return Array.from({length: Math.max(t.length, o.length)}, (_, i) => [t[i]?.[0] || '', t[i] ? n1(t[i][1]) + '%' : '', o[i]?.[0] || '', o[i] ? n1(o[i][1]) + '%' : '']); })());
