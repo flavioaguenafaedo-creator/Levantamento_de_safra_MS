@@ -531,8 +531,9 @@ const MODOS_AG = {hoje: 'Hoje', fut: 'Pior dia (15 dias)', at30: 'Demanda atendi
 let agVis = 'hoje', BHC = null;
 // água disponível (mm) na zona radicular: textura do solo sob a cultura (ou do município) para 60 cm; cana com raízes até 120 cm
 function cadMun(cid, cd) { const f = MUN_IDX[cd]; return (soloCultura(cid, cd)?.cad || (f && soloDoMunicipio(f)?.cad) || 60) * (cid === 'cana' ? PROF_CANA / 60 : 1); }
-function bhCultura(c) {   // balanço de todos os municípios da cultura, em cache
-  if (!c || !CL) return null;
+const TXT_ARROZ_AGUA = 'O arroz em MS é irrigado por inundação: a lâmina d’água mantida na quadra supre a demanda da cultura, de modo que o balanço hídrico pela chuva não se aplica. A chuva interessa aqui pela recarga dos mananciais usados na irrigação, pelo excesso na colheita e pelo tempo no plantio.';
+function bhCultura(c) {   // balanço de todos os municípios da cultura, em cache (não se aplica ao arroz irrigado)
+  if (!c || !CL || c.cid === 'arroz') return null;
   const chave = [safraSel, cultSel, CL.gerado, !!VAL, !!SOLO_CULT, !!dadosSolo].join('|');
   if (BHC?.chave === chave) return BHC.mun;
   const mun = {}, cc = c.cid === cultAtual()?.cid ? cultAtual() : c;   // sempre a cultura inteira (o recorte por região é feito por quem usa)
@@ -556,6 +557,7 @@ defCam('agua', {grupo: 'clima', nome: 'Água no solo', op: .8, desab: true, st: 
     const L_ = L.geoJSON(dadosMun, {interactive: false, style: CAM.agua.estilo}); atualizarSub('agua'); return L_; },
   sub: () => {
     const c = cultAtual(); if (!c) return '';
+    if (c.cid === 'arroz') return `<div class="nota">${TXT_ARROZ_AGUA}</div>`;
     const B = CL ? bhCultura(c) : null, kp = paramsKc(c), area = new Array(4).fill(0); let semCampo = 0, tot = 0;
     if (B) for (const [cd, bh] of Object.entries(B)) { const w = c.mun[cd]?.area || 1, k = classeAgua(bh); if (k == null) continue; tot += w; if (k < 0) semCampo += w; else area[k] += w; }
     const comCampo = tot - semCampo, crit = agVis.startsWith('at') ? ['≥ 95%', '80–95%', '60–80%', '< 60%'] : ['Ks = 1', 'Ks 0,7–0,99', 'Ks 0,4–0,7', 'Ks < 0,4'];
@@ -569,6 +571,7 @@ defCam('agua', {grupo: 'clima', nome: 'Água no solo', op: .8, desab: true, st: 
   depois: () => document.querySelectorAll('#modo-ag button').forEach(b => b.onclick = () => { agVis = b.dataset.v; CAM.agua.layer && CAM.agua.layer.setStyle(CAM.agua.estilo); atualizarSub('agua'); })});
 function dicaMun(f) {   // dica ao passar o mouse; com a camada de água ligada, mostra a situação da cultura
   const nome = esc(f.properties.NM_MUN), c = cultAtual(); if (!CAM.agua?.on || !c || !CL) return nome;
+  if (c.cid === 'arroz') return `${nome}<br><span style="opacity:.75">arroz irrigado: balanço hídrico não se aplica</span>`;
   const bh = bhCultura(c)?.[String(+f.properties.CD_MUN)]; if (!bh) return `${nome}<br><span style="opacity:.75">sem ${esc(c.nome.toLowerCase())} na planilha</span>`;
   const k = classeAgua(bh), cls = k == null ? '' : k < 0 ? 'sem lavoura em campo' : CLS_AG[k].nome.toLowerCase();
   const det = agVis === 'hoje' ? `água ${n0(bh.atual)}% · Ks ${n2(bh.ksAtual)} · demanda ${n1(bh.etcHoje)} mm/dia` : agVis === 'fut' ? `pior Ks ${n2(bh.ksMinFutCampo)} · água mín. ${n0(bh.minFut)}%`
@@ -1240,6 +1243,7 @@ function htmlJanelaClima(alvo) {
     <span class="seg">${[15, 30, 60, 90].map(n => `<button data-n="${n}">${n} d</button>`).join('')}${c && !c.semFenologia ? '<button data-n="safra">Safra</button>' : ''}</span></div><div id="jc-hist"><p class="nota">Carregando…</p></div></section>`);
   // 3. água no solo
   if (!c) out.push(`<section class="jc larga"><h3>Água no solo</h3><p>Escolha uma cultura em “Safra e cultura” para ver o balanço hídrico.</p></section>`);
+  else if (c.cid === 'arroz') out.push(`<section class="jc larga"><h3>Água no solo · ${esc(c.nome)}</h3><p>${TXT_ARROZ_AGUA}</p></section>`);
   else if (est) out.push(`<section class="jc larga">${htmlAguaEstado(c)}</section>`);
   else { const m = c.mun[cd]; out.push(`<section class="jc larga">${m ? htmlAgua(f, c, m, mc, 900) : `<h3>Água no solo · ${esc(c.nome)}</h3><p>Sem ${esc(c.nome.toLowerCase())} ${c.semFenologia ? 'mapeada' : 'na planilha'} para este município.</p>`}</section>`); }
   return `<div class="janela-clima">${out.join('')}</div><div class="nota" style="margin-top:10px">${esc(CL.fonte || 'Open-Meteo')} Atualizado em ${new Date(CL.gerado).toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'})}.</div>`;
@@ -1364,6 +1368,7 @@ function graficoAgua(bh, W = 300, H = 100) {
     <text x="0" y="${H + 34}"><tspan style="fill:var(--azul)">— água no solo (% da disponível)</tspan> <tspan style="fill:#2171b5">■ chuva (máx ${pm.toFixed(0)} mm)</tspan></text></svg>`;
 }
 function htmlAgua(f, c, m, mc, W) {
+  if (c.cid === 'arroz') return `<h3>Água no solo · ${esc(c.nome)}</h3><p>${TXT_ARROZ_AGUA}</p>`;
   const cd = String(+f.properties.CD_MUN), bh = bhCultura(c)?.[cd] || balancoHidrico(mc, cadMun(c.cid, cd), c, m, cd), kp = paramsKc(c);
   const k = bh.campoAtual > 0 ? classeKs(bh.ksAtual) : -1, cls = k < 0 ? 'Sem lavoura em campo' : CLS_AG[k].nome;
   let h = `<h3>Água no solo · ${esc(c.nome)}</h3>`;
@@ -1383,7 +1388,7 @@ function htmlAguaCulturas(f) {   // compara todas as culturas da planilha com la
   const linhas = [], safras = Object.keys(PL).sort().reverse(), fontes = safras.map(s => [s, PL[s]]);
   if (CANA) fontes.push(['', {'Cana-de-açúcar': CANA}]);
   for (const [s, P] of fontes) for (const [n, c] of Object.entries(P)) {
-    const m = c.mun[cd]; if (!m || linhas.some(l => l.n === n)) continue;
+    const m = c.mun[cd]; if (!m || c.cid === 'arroz' || linhas.some(l => l.n === n)) continue;
     const bh = balancoHidrico(mc, cadMun(c.cid, cd), c, m, cd);
     if (!(bh.campoAtual > 0) && bh.ksMinFutCampo == null) continue;
     linhas.push({n, s, c, bh});
@@ -1507,7 +1512,8 @@ function gerarAnalise(f, soDados = false) {
     const p30 = soma('p', h - 30, h), p15 = soma('p', h, h + 15), et30 = soma('et0', h - 30, h), et15 = soma('et0', h, h + 15), seco = diasSecos(mc);
     const tx15 = mc.tx.slice(h, h + 15), tn15 = mc.tn.slice(h, h + 15), quente = tx15.filter(t => t >= 35).length, geada = tn15.filter(t => t != null && t <= 3).length;
     let t = `Nos últimos 30 dias, o modelo estima <b>${p30.toFixed(0)} mm</b> de chuva para uma evapotranspiração de referência de ${et30.toFixed(0)} mm${seco >= 1 ? `, com ${seco} dia${seco > 1 ? 's' : ''} seguido${seco > 1 ? 's' : ''} sem chuva até hoje` : ''}.`;
-    const bh = balancoHidrico(mc, cad, c, m, cd), kp = c ? paramsKc(c) : null; bhR = bh;
+    const irrig = cid === 'arroz', bh = irrig ? {fator: {base: []}, atual: null} : balancoHidrico(mc, cad, c, m, cd), kp = c && !irrig ? paramsKc(c) : null; bhR = irrig ? null : bh;
+    if (irrig) t += ' Como o arroz é irrigado por inundação, o balanço hídrico pela chuva não se aplica: a água da lavoura vem da lâmina mantida na quadra.';
     if (bh.fator.base.length && Math.abs(bh.fator.f - 1) >= .03)
       t += ` A ET0 do modelo foi ajustada por um fator de ${bh.fator.f.toFixed(2).replace('.', ',')}, obtido da comparação com a ET0 Penman-Monteith calculada nas estações INMET próximas (o modelo ficou ${bh.fator.base.slice(0, 2).map(b => n1(Math.abs(b.vies_pct)) + '% ' + (b.vies_pct > 0 ? 'acima' : 'abaixo') + ' em ' + esc(b.nome)).join(' e ')}).`;
     if (bh.atual != null) {
@@ -1639,7 +1645,8 @@ function gerarAnaliseEstado() {
     out.push(`<h4>Solos ocupados pela cultura</h4><p>Pelo mapa de uso da Aprosoja-MS (${n0(sc.area)} ha de ${esc(sc.nome.toLowerCase())} mapeados), a área se distribui assim por textura do solo: ${tc.map(([k, v]) => `${v.toFixed(0)}% ${esc(k.toLowerCase())}`).join('; ')}. Por classe, predominam ${oc.slice(0, 3).map(([k, v]) => `${esc(k.toLowerCase())}s (${v.toFixed(0)}%)`).join(', ')}. ${(sc.textura['Arenosa'] || 0) >= 10 ? `A fração em solos arenosos (${sc.textura['Arenosa'].toFixed(0)}%) é a mais sensível a veranicos.` : 'A maior parte da área está em solos de média a alta retenção de água.'} <span class="nota">(Solos 1:5.000.000.)</span></p>`); }
   // 3. água no solo por município
   const linhas = []; let aR = 0, aRF = 0, aT = 0;
-  if (CL) for (const [cd, m] of Object.entries(c.mun)) {
+  if (CL && cid === 'arroz') out.push(`<h4>Água no solo</h4><p>${TXT_ARROZ_AGUA}</p>`);
+  if (CL && cid !== 'arroz') for (const [cd, m] of Object.entries(c.mun)) {
     const mc = CL.mun[cd], f = MUN_IDX[cd]; if (!mc || !f) continue;
     const cad = cadMun(cid, cd), bh = balancoHidrico(mc, cad, c, m, cd), w = m.area || 1;
     aT += w; if (bh.ksAtual < 1) aR += w; if (bh.diasEstresseFut) aRF += w; linhas.push({cd, nome: f.properties.NM_MUN, w, bh});
@@ -2531,7 +2538,7 @@ async function analisePDFCana(ini, fim, dias, opts) {
 }
 // estado da água no solo hoje (balanço FAO-56 por município) — tabela do anexo
 function aguaPDF(c, cid) {
-  if (!CL) return null; const cls = [0, 0, 0, 0], clsF = [0, 0, 0, 0]; let tw = 0, twF = 0; const pior = [];
+  if (!CL || cid === 'arroz') return null; const cls = [0, 0, 0, 0], clsF = [0, 0, 0, 0]; let tw = 0, twF = 0; const pior = [];
   for (const [cd, m] of Object.entries(c.mun)) { const mc = CL.mun[cd], f = MUN_IDX[cd]; if (!mc || !f) continue;
     const bh = balancoHidrico(mc, cadMun(cid, cd), c, m, cd), w = m.area || 1;
     if (bh.campoAtual > 0 && bh.ksAtual != null) { tw += w; cls[classeKs(bh.ksAtual)] += w; }
