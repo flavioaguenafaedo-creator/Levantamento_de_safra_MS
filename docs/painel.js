@@ -632,7 +632,7 @@ defCam('est', {grupo: 'clima', nome: 'Estações INMET',
 // =====================================================================
 // FOTOS DE CAMPO (cultura pela subpasta; posição pelo GPS ou pelo carimbo)
 // =====================================================================
-const CACHE_FOTOS = 'painel-safra.fotos.v4';   // v4: carimbo com hemisfério antes do número (S 21.6°, W 54.4°)
+const CACHE_FOTOS = 'painel-safra.fotos.v5';   // v5: espaço/ponto perdido na leitura e texto branco sem contorno   // v4: carimbo com hemisfério antes do número (S 21.6°, W 54.4°)
 let fotoFiltro = null;      // Set de ids de cultura visíveis (null = todas)
 const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 let _ocr = null;
@@ -649,7 +649,8 @@ function ocrWorker() {
 const MASCARAS = {
   vermelho: {f: (r, g, b) => r > 150 && g < 110 && b < 110 && r - Math.max(g, b) > 70, contorno: false},
   amarelo: {f: (r, g, b) => r > 200 && g > 200 && b < 90 && Math.abs(r - g) < 35, contorno: false},
-  branco: {f: (r, g, b) => Math.min(r, g, b) > 205 && Math.max(r, g, b) - Math.min(r, g, b) < 35, contorno: true}
+  branco: {f: (r, g, b) => Math.min(r, g, b) > 205 && Math.max(r, g, b) - Math.min(r, g, b) < 35, contorno: true},
+  brancoPuro: {f: (r, g, b) => Math.min(r, g, b) >= 245 && Math.max(r, g, b) - Math.min(r, g, b) < 25, contorno: false}   // texto branco sem contorno sobre céu claro (câmeras Android)
 };
 function perto(escuro, w, h, raio) {   // dilatação (máximo móvel) separável
   const t = new Uint8Array(w * h), o = new Uint8Array(w * h);
@@ -678,14 +679,14 @@ async function lerCarimbo(file) {
     const w = await ocrWorker(), t1 = (await w.recognize(c)).data.text; let r = interpretarCarimbo(t1);
     if (!r || r.lat == null) {                       // 2ª leitura só com dígitos e sinais de coordenada
       await w.setParameters({tessedit_char_whitelist: '0123456789,.-SWNOE '});
-      try { const r2 = interpretarCarimbo((await w.recognize(c)).data.text); if (r2 && r2.lat != null) r = {...(r || {}), lat: r2.lat, lon: r2.lon}; }
+      try { const r2 = interpretarCarimbo((await w.recognize(c)).data.text); if (r2 && r2.lat != null && (dentro(r2.lat, LIM.lat) && dentro(r2.lon, LIM.lon) || r?.lat == null)) r = {...(r || {}), lat: r2.lat, lon: r2.lon}; }
       finally { await w.setParameters({tessedit_char_whitelist: ''}); }
     }
     return r;
   };
   let melhor = null;
   // rodapé primeiro (mais comum), depois topo; cores em ordem; lado direito antes da largura toda
-  outer: for (const y0 of [H - faixa, 0]) for (const cor of ['vermelho', 'amarelo', 'branco']) for (const x0 of [Math.round(W * .35), 0]) {
+  outer: for (const y0 of [H - faixa, 0]) for (const cor of ['vermelho', 'amarelo', 'branco', 'brancoPuro']) for (const x0 of [Math.round(W * .35), 0]) {
     const r = await tentar(y0, x0, cor);
     if (r && r.lat != null) { melhor = {...(melhor || {}), ...r}; break outer; }
     if (r && r.data && !melhor) melhor = r;
@@ -707,7 +708,12 @@ function numeroGeo(tok, lim, hemNeg) {
   return null;
 }
 function interpretarCarimbo(txt) {
-  const t = String(txt || '').replace(/[Oo](?=\d)/g, '0').replace(/[‐‑–—~]/g, '-').replace(/([.,]\d+) +(?=\d)/g, '$1'), out = {};
+  const t = String(txt || '').replace(/[Oo](?=\d)/g, '0').replace(/[‐‑–—~]/g, '-').replace(/([.,]\d+) +(?=\d)/g, '$1')
+    .replace(/(^|\s)\d{1,2}[:.]\d{2}[:.]\d{2}(?=\s|$)/g, '$1 ')   // hora do carimbo (10:28:58), que o OCR às vezes lê com pontos
+    .replace(/(\d{4})\s+\d{1,2}[:.]?\d{2}[:.]?\d{2}(?=\s|$)/g, '$1 ')   // hora logo depois do ano, com separador perdido (10.2858)
+    .replace(/(-\d{2}) (\d{3,7})\s*([NSEWLO])(?![a-z])/gi, '$1.$2$3')   // "-54 9665W": vírgula perdida na leitura
+    .replace(/(\d) +(?=[.,]\d)/g, '$1')   // "54 .460816": espaço lido antes do ponto
+    .replace(/(^|[^A-Za-z])([NSWEOL5])\s*(\d{2}) +(\d{4,7})(?!\d)/g, '$1$2 $3.$4'), out = {};   // "W 54 676450": ponto perdido na leitura
   // 0) hemisfério antes do número: "S 21.646588°, W 54.451925°" (carimbo de câmera do iPhone e outros apps)
   const h = t.match(/(?:^|[^A-Za-z])([NS5])\s*(\d{1,2}[.,]\d{2,7})\s*°?\s*[,;]?\s*([EWLO])\s*(\d{1,3}[.,]\d{2,7})/i);
   if (h) { let lat = parseFloat(h[2].replace(',', '.')), lon = parseFloat(h[4].replace(',', '.'));
