@@ -338,13 +338,34 @@ const pctCritico = (c, m, j) => distrib(c, m, j).reduce((t, v, i) => t + (c.esta
 const semanaDe = (c, d) => Math.floor((d - c.inicio) / (7 * 864e5)) + 1;
 const dataSem = (c, j) => addD(c.inicio, 7 * (j - 1));
 // Cana-de-açúcar: sem acompanhamento fenológico na planilha. Entra como "cultura sem fenologia", com a área do
-// mapeamento da Aprosoja-MS por município (solo_cultura.json), Kc médio anual e raízes mais profundas.
+// mapeamento da Aprosoja-MS por município (solo_cultura.json), Kc da soqueira pela idade desde o corte e raízes mais profundas.
 const CANA_SEL = '__cana', KC_CANA = 1.0, P_CANA = .65, PROF_CANA = 120;
+// Kc da cana pela idade da soqueira (FAO-56, tabela 12: 0,40 / 1,25 / 0,75), com fases ajustadas a um ciclo de 12 meses:
+// 30 dias iniciais (rebrota sobre a palhada), 90 de desenvolvimento, 180 de pleno crescimento e maturação até o corte seguinte.
+// O canavial de cada município é tratado como uma mistura de talhões colhidos em meses diferentes, na proporção do
+// calendário de colheita informado pelas usinas do polo (ou do estado); sem as planilhas das usinas, usa um perfil típico.
+const KC_SOCA = {ini: .40, mid: 1.25, fim: .75, dIni: 30, dDes: 90, dMid: 180, dFim: 60};
+const CAL_CANA_PADRAO = [0, 0, 0, 6, 12, 14, 15, 16, 15, 13, 9, 0];   // % da área colhida por mês (abril a novembro), perfil típico do Centro-Sul
+function kcSoca(t) { const K = KC_SOCA, a = K.dIni, b = a + K.dDes, c = b + K.dMid;
+  if (t < a) return K.ini; if (t < b) return K.ini + (K.mid - K.ini) * (t - a) / K.dDes; if (t < c) return K.mid; return Math.max(K.fim, K.mid - (K.mid - K.fim) * (t - c) / K.dFim); }
+function calCana(cd) {   // calendário de colheita (área por mês) que vale para o município
+  const R = typeof USINAS !== 'undefined' ? USINAS?.R : null, tem = v => v && v.some(x => x > 0);
+  if (R) { const pl = typeof POLO_RGI !== 'undefined' ? POLO_RGI[MUN_IDX[cd]?.properties.NM_RGI] : null;
+    if (pl && tem(R.calPolo?.[pl])) return {cal: R.calPolo[pl], fonte: 'polo ' + pl}; if (tem(R.calendario)) return {cal: R.calendario, fonte: 'estado'}; }
+  return {cal: CAL_CANA_PADRAO, fonte: 'padrão'};
+}
+const KC_CANA_CACHE = new Map();
+function kcCana(cd, data) {   // Kc médio do canavial do município numa data (mistura das idades de soqueira)
+  const C = calCana(cd), key = C.fonte + '|' + (typeof USINAS !== 'undefined' && USINAS ? USINAS.safra : '') + '|' + data.getFullYear() + '-' + data.getMonth() + '-' + data.getDate();
+  if (KC_CANA_CACHE.has(key)) return KC_CANA_CACHE.get(key);
+  let s = 0, w = 0; for (let k = 0; k < 12; k++) { const a = C.cal[k] || 0; if (a <= 0) continue; let h = new Date(data.getFullYear(), k, 15); if (h > data) h = new Date(data.getFullYear() - 1, k, 15); s += a * kcSoca((data - h) / 864e5); w += a; }
+  const v = w ? s / w : KC_CANA; KC_CANA_CACHE.set(key, v); return v;
+}
 let CANA = null;
 function montarCana() {
   if (!SOLO_CULT) return null;
   const n = Object.keys(SOLO_CULT.culturas).find(x => culturaDe(x)?.id === 'cana'); if (!n) return null;
-  const mun = {}; for (const [cd, r] of Object.entries(SOLO_CULT.culturas[n].mun)) if (r.area >= 1) mun[cd] = {area: r.area};
+  const mun = {}; for (const [cd, r] of Object.entries(SOLO_CULT.culturas[n].mun)) if (r.area >= 1) mun[cd] = {area: r.area, cd};
   return CANA = {cid: 'cana', nome: 'Cana-de-açúcar', semFenologia: true, mun, estadios: [], arquivos: SOLO_CULT.culturas[n].arquivos || []};
 }
 const profRaiz = c => c?.cid === 'cana' ? PROF_CANA : 60;
@@ -360,7 +381,7 @@ const KC_FAO = {soja: [.40, 1.15, .50, .50], milho1: [.30, 1.20, .60, .55], milh
   amendoim: [.40, 1.15, .60, .50], arroz: [1.05, 1.20, .75, .20], feijao1: [.40, 1.15, .35, .45], feijao2: [.40, 1.15, .35, .45],
   algodao: [.35, 1.18, .60, .65], trigo: [.30, 1.15, .30, .55], aveia: [.30, 1.15, .25, .55], cana: [.40, 1.25, .75, .65]};
 const KC_PALHADA = .30;   // área colhida ou não semeada (solo com palhada)
-function paramsKc(c) { if (c.semFenologia) return {ini: KC_CANA, mid: KC_CANA, fim: KC_CANA, p: P_CANA, fonte: 'média anual'};
+function paramsKc(c) { if (c.semFenologia) return {ini: KC_SOCA.ini, mid: KC_SOCA.mid, fim: KC_SOCA.fim, p: P_CANA, fonte: 'soqueira pela idade desde o corte'};
   const t = KC_FAO[c.cid] || [.4, 1.1, .5, .5]; const o = c.kcPlan || {};
   return {ini: o.ini ?? t[0], mid: o.mid ?? t[1], fim: o.fim ?? t[2], p: o.p ?? t[3], fonte: c.kcPlan ? 'planilha' : 'FAO-56'}; }
 // curva de Kc por dias após a semeadura, ancorada nos estádios da planilha:
@@ -378,7 +399,7 @@ function kcCurva(c, das) {
 }
 // Kc médio da área semeada numa data: cada semana de semeadura é uma coorte com sua idade
 function kcInfo(c, m, data) {   // kc médio da área semeada e % dessa área ainda em campo (não colhida)
-  if (c.semFenologia) return {kc: KC_CANA, campo: 100};   // canavial: presente o ano todo, idades misturadas
+  if (c.semFenologia) return {kc: m?.cd ? kcCana(m.cd, data) : KC_CANA, campo: 100};   // canavial: presente o ano todo, mistura de idades de soqueira
   let soma = 0, peso = 0, ant = 0, campo = 0; const Dh = c.estadios.at(-1).dias;
   for (let w = 1; w <= m.serie.length; w++) {
     const ac = acum(m.serie, w), inc = ac - ant; ant = ac; if (inc <= 0) continue;
@@ -534,7 +555,7 @@ function cadMun(cid, cd) { const f = MUN_IDX[cd]; return (soloCultura(cid, cd)?.
 const TXT_ARROZ_AGUA = 'O arroz em MS é irrigado por inundação: a lâmina d’água mantida na quadra supre a demanda da cultura, de modo que o balanço hídrico pela chuva não se aplica. A chuva interessa aqui pela recarga dos mananciais usados na irrigação, pelo excesso na colheita e pelo tempo no plantio.';
 function bhCultura(c) {   // balanço de todos os municípios da cultura, em cache (não se aplica ao arroz irrigado)
   if (!c || !CL || c.cid === 'arroz') return null;
-  const chave = [safraSel, cultSel, CL.gerado, !!VAL, !!SOLO_CULT, !!dadosSolo].join('|');
+  const chave = [safraSel, cultSel, CL.gerado, !!VAL, !!SOLO_CULT, !!dadosSolo, typeof USINAS !== 'undefined' && USINAS ? USINAS.safra : ''].join('|');
   if (BHC?.chave === chave) return BHC.mun;
   const mun = {}, cc = c.cid === cultAtual()?.cid ? cultAtual() : c;   // sempre a cultura inteira (o recorte por região é feito por quem usa)
   for (const [cd, m] of Object.entries(cc.mun)) { const mc = CL.mun[cd]; if (mc) mun[cd] = balancoHidrico(mc, cadMun(c.cid, cd), c, m, cd); }
@@ -566,7 +587,7 @@ defCam('agua', {grupo: 'clima', nome: 'Água no solo', op: .8, desab: true, st: 
     return `<div class="seg seg-wrap" id="modo-ag">${Object.entries(MODOS_AG).map(([k, n]) => `<button data-v="${k}" class="${agVis === k ? 'on' : ''}">${n}</button>`).join('')}</div>
       <div class="resumo">${res}</div>
       <div class="leg">${CLS_AG.map((x, k) => `<div><i style="background:${x.cor}"></i>${x.nome} (${crit[k]})</div>`).join('')}<div><i style="background:${COR_SEMCAMPO}"></i>Sem lavoura em campo</div></div>
-      <div class="nota">${c.semFenologia ? `Demanda da cana: ETc = ET0 × Kc médio anual de ${n2(KC_CANA)} (canaviais com idades misturadas; valor aproximado da curva FAO-56, 0,40 / 1,25 / 0,75). Raízes até ${PROF_CANA} cm; estresse abaixo de ${(100 * (1 - P_CANA)).toFixed(0)}% da água disponível (p = ${n2(P_CANA)}). ` : `Demanda de ${esc(c.nome.toLowerCase())}: ETc = ET0 × Kc (${n2(kp.ini)} no início, ${n2(kp.mid)} no pico, ${n2(kp.fim)} no fim; ${kp.fonte}), seguindo a fase de cada semana de semeadura da planilha. Estresse começa quando a água cai abaixo de ${(100 * (1 - kp.p)).toFixed(0)}% da disponível (p = ${n2(kp.p)}). `}Água disponível pela textura do solo sob a cultura. ${agVis.startsWith('at') ? 'Demanda atendida = consumo estimado ÷ consumo potencial nos dias com lavoura em campo.' : 'Ks = fração da transpiração potencial que a lavoura consegue manter.'} Clique no município para ver o gráfico.</div>`;
+      <div class="nota">${c.semFenologia ? `Demanda da cana: ETc = ET0 × Kc da soqueira pela idade desde o corte (FAO-56: 0,40 logo após o corte, 1,25 em pleno crescimento, 0,75 na maturação), misturando os talhões conforme o calendário de colheita ${typeof USINAS !== 'undefined' && USINAS ? 'informado pelas usinas' : 'típico do Centro-Sul'}; Kc médio hoje no estado ≈ ${n2(kcCana(Object.keys(c.mun)[0], HOJE))}. Raízes até ${PROF_CANA} cm; estresse abaixo de ${(100 * (1 - P_CANA)).toFixed(0)}% da água disponível (p = ${n2(P_CANA)}). ` : `Demanda de ${esc(c.nome.toLowerCase())}: ETc = ET0 × Kc (${n2(kp.ini)} no início, ${n2(kp.mid)} no pico, ${n2(kp.fim)} no fim; ${kp.fonte}), seguindo a fase de cada semana de semeadura da planilha. Estresse começa quando a água cai abaixo de ${(100 * (1 - kp.p)).toFixed(0)}% da disponível (p = ${n2(kp.p)}). `}Água disponível pela textura do solo sob a cultura. ${agVis.startsWith('at') ? 'Demanda atendida = consumo estimado ÷ consumo potencial nos dias com lavoura em campo.' : 'Ks = fração da transpiração potencial que a lavoura consegue manter.'} Clique no município para ver o gráfico.</div>`;
   },
   depois: () => document.querySelectorAll('#modo-ag button').forEach(b => b.onclick = () => { agVis = b.dataset.v; CAM.agua.layer && CAM.agua.layer.setStyle(CAM.agua.estilo); atualizarSub('agua'); })});
 function dicaMun(f) {   // dica ao passar o mouse; com a camada de água ligada, mostra a situação da cultura
@@ -1481,7 +1502,7 @@ function gerarAnalise(f, soDados = false) {
   // 1. situação da lavoura
   let dCrit = null, crit15 = 0;
   if (c?.semFenologia) {
-    out.push(`<h4>Situação da lavoura</h4><p>${m ? `O mapeamento da Aprosoja-MS indica <b>${n0(m.area)} ha</b> de cana-de-açúcar em ${nome}${p.AREA_KM2 ? ` (${n1(100 * m.area / (p.AREA_KM2 * 100))}% da área do município)` : ''}.` : `Não há cana-de-açúcar mapeada em ${nome}.`} A cana não tem acompanhamento fenológico na planilha; a análise considera a área mapeada, os solos sob a cultura, o clima e o balanço hídrico com Kc médio anual de ${n2(KC_CANA)} e raízes até ${PROF_CANA} cm.</p>`);
+    out.push(`<h4>Situação da lavoura</h4><p>${m ? `O mapeamento da Aprosoja-MS indica <b>${n0(m.area)} ha</b> de cana-de-açúcar em ${nome}${p.AREA_KM2 ? ` (${n1(100 * m.area / (p.AREA_KM2 * 100))}% da área do município)` : ''}.` : `Não há cana-de-açúcar mapeada em ${nome}.`} A cana não tem acompanhamento fenológico na planilha; a análise considera a área mapeada, os solos sob a cultura, o clima e o balanço hídrico com o Kc da soqueira conforme a idade desde o corte (hoje ≈ ${n2(kcCana(cd, HOJE))}, pelo calendário de colheita ${calCana(cd).fonte === 'padrão' ? 'típico' : 'das usinas'}) e raízes até ${PROF_CANA} cm.</p>`);
   } else if (c && m) {
     const pl = acum(m.serie, semSel), ant = acum(m.serie, semSel - 1), ms = mediaMS(c, x => acum(x.serie, semSel)), d = distrib(c, m, semSel);
     const dS = dataSem(c, semSel), proj = dS > HOJE;
@@ -1722,7 +1743,7 @@ const METODOLOGIA = `
 <p><b>Coeficiente de cultura (Kc).</b> Os valores de referência são os da FAO-56 (tabela 12) para cada cultura (Kc inicial / médio / final): soja 0,40 / 1,15 / 0,50; milho 0,30 / 1,20 / 0,60; sorgo 0,30 / 1,05 / 0,55; amendoim 0,40 / 1,15 / 0,60; arroz 1,05 / 1,20 / 0,75; feijão 0,40 / 1,15 / 0,35; algodão 0,35 / 1,18 / 0,60; trigo 0,30 / 1,15 / 0,30; aveia 0,30 / 1,15 / 0,25. Podem ser substituídos pela equipe na aba Parâmetros da planilha. A curva de Kc segue os estádios da planilha: valor inicial até o segundo estádio, subida linear até o primeiro estádio crítico, valor médio até o fim das fases críticas e queda linear até a colheita. Na área colhida ou não semeada usa-se 0,30 (solo com palhada). Cada semana de semeadura é tratada como um grupo com sua própria idade, e o Kc do município é a média ponderada pela área semeada em cada semana.</p>
 <p><b>Balanço hídrico da zona radicular (FAO-56, capítulo 8).</b> O cálculo é diário, de 45 dias antes de hoje até 15 dias de previsão. A água total disponível (TAW) é estimada pela textura predominante para 60 cm de raízes (arenosa ~40 mm, média ~65 mm, argilosa ~90 mm). A água facilmente disponível é RAW = p·TAW, com p de cada cultura (tabela 22; soja 0,50, milho 0,55, feijão 0,45, algodão 0,65 etc.), ajustado pela demanda do dia (p + 0,04·(5 − ETc)). Quando a depleção ultrapassa a RAW, a evapotranspiração real é reduzida pelo coeficiente de estresse Ks = (TAW − Dr)/((1 − p)·TAW). A chuva entra integralmente, e o excedente acima da capacidade é perdido por drenagem. A depleção inicial é assumida em 50% da TAW, e os primeiros 15 dias servem de ajuste. Ks &lt; 1 indica restrição hídrica.</p>
 <p><b>Camada “Água no solo” e gráfico do município.</b> Para a cultura escolhida, cada município é classificado pelo balanço acima, com a demanda própria da cultura (ETc = ET0 × Kc da fase em que a área semeada está) e o seu limite de estresse (p). Modos: <i>Hoje</i> e <i>Pior dia (15 dias)</i> usam o Ks: atendida (Ks = 1), restrição leve (0,7 a 0,99), moderada (0,4 a 0,7) e severa (abaixo de 0,4). <i>Demanda atendida</i> é o consumo estimado (ETa) dividido pelo consumo potencial (ETc) nos dias com lavoura em campo: atendida (95% ou mais), leve (80 a 95%), moderada (60 a 80%) e severa (abaixo de 60%). Municípios sem área semeada ou já colhida no período aparecem em cinza. Os limites das classes são convenções do painel para leitura rápida, não limiares de perda de produtividade. O gráfico da ficha mostra a água no solo dia a dia (45 dias passados e 15 de previsão, em tracejado), a linha de início do estresse (1 − p), a chuva diária e uma fita com a classe de Ks de cada dia. Quando há mais de uma cultura em campo no município, a ficha compara Kc, demanda, água e Ks entre elas.</p>
-<p><b>Cana-de-açúcar.</b> A cana não tem acompanhamento fenológico na planilha. Ela aparece na seleção de cultura como “sem fenologia”: a área por município vem do mapeamento da Aprosoja-MS, e o balanço hídrico usa Kc médio anual de 1,0, que é um valor aproximado para canaviais com idades misturadas, entre os valores da FAO-56 (0,40 no início, 1,25 no pico e 0,75 no fim). Usa também p = 0,65 (tabela 22) e raízes até 120 cm (a FAO-56 indica 1,2 a 2,0 m), o que dobra a água disponível em relação às culturas anuais. Kc e profundidade são convenções do painel e devem ser revistos com a equipe.</p>
+<p><b>Cana-de-açúcar.</b> A cana não tem acompanhamento fenológico na planilha. Ela aparece na seleção de cultura como “sem fenologia”: a área por município vem do mapeamento da Aprosoja-MS, e o balanço hídrico usa o Kc da soqueira conforme a idade desde o corte (FAO-56, tabela 12: 0,40 nos primeiros 30 dias de rebrota sobre a palhada, subindo até 1,25 aos 120 dias, 1,25 por 180 dias e descendo a 0,75 na maturação). Como cada município tem talhões colhidos em meses diferentes, o Kc do dia é a média das idades, ponderada pelo calendário de colheita informado pelas usinas do polo (ou do estado); sem as planilhas das usinas, usa um perfil típico do Centro-Sul (abril a novembro, pico em agosto). Assim, logo depois da colheita a demanda cai, e no verão, com o canavial fechado, chega perto de 1,2. Não entram a cana-planta nem as áreas em reforma. Usa também p = 0,65 (tabela 22) e raízes até 120 cm (a FAO-56 indica 1,2 a 2,0 m), o que dobra a água disponível em relação às culturas anuais. Kc e profundidade são convenções do painel e devem ser revistos com a equipe.</p>
 <p><b>Filtro por cultura.</b> A cultura escolhida em “Safra e cultura” filtra a ficha, a análise, a camada de água no solo, as fotos no mapa (opção “só a cultura selecionada”, ligada por padrão) e os relatos (só os que citam a cultura; os demais são contados à parte).</p>
 <h3>8. Fotos de campo</h3>
 <p>A cultura de cada foto é identificada pela subpasta (por exemplo “04_Fotos_Campo/Soja”). A posição é lida do GPS gravado na foto (EXIF). Quando a foto não tem GPS, como as enviadas pelo WhatsApp, o painel lê por reconhecimento de texto (OCR) o carimbo de data e coordenadas impresso na imagem pelo aplicativo de câmera. São tentados textos vermelhos, amarelos e brancos (no branco, exige-se contorno escuro), no rodapé e no topo da foto, com uma segunda leitura restrita a dígitos. Leituras com o separador decimal perdido são reparadas apenas quando o resultado cai dentro da faixa geográfica de MS (17°–24,3° S; 50,7°–58,4° O). Entre as datas lidas, vale a mais frequente. O município é obtido pela sobreposição do ponto com a malha municipal.</p>
@@ -1964,6 +1985,7 @@ function analisarUsinas(US, cidCana) {
   if (cidCana && typeof CANA !== 'undefined' && CANA) { R.mapa = {}; for (const [cd, m] of Object.entries(CANA.mun)) { const rgi = MUN_IDX[cd]?.properties.NM_RGI, p = POLO_RGI[rgi] || 'Outras'; R.mapa[p] = (R.mapa[p] || 0) + m.area; } R.mapaTot = somaObj(R.mapa); }
   // calendário de colheita (ha por mês) e período de moagem
   R.calendario = new Array(12).fill(0); for (const u of cana) (u.calendario || []).forEach((v, i) => R.calendario[i] += v || 0);
+  R.calPolo = {}; for (const u of cana) { const cp = R.calPolo[u.polo] ??= new Array(12).fill(0); (u.calendario || []).forEach((v, i) => cp[i] += v || 0); }
   return R;
 }
 // chuva ocorrida × histórica informada pelas usinas (meses preenchidos por todas as usinas do grupo, ponderado pela moagem)
@@ -2312,9 +2334,9 @@ function blocosTempo(serie) {
 // tempo de uma cultura contado em relação ao panorama estadual: só o que difere, sem repetir a história das quinzenas
 function tempoRelativo(serie, serieT, suj, onde) {
   if (!serie?.length) return ''; const p = serie.reduce((t, x) => t + x.p, 0), e = serie.reduce((t, x) => t + x.e, 0);
-  const cmp = p > e * 1.15 ? vr('cmpMais', [`mais do que o solo e as plantas perderam por evaporação (${n0(e)} mm)`, `acima da demanda de evaporação do período (${n0(e)} mm)`, `com sobra em relação aos ${n0(e)} mm de evapotranspiração`]) : p < e * .85 ? vr('cmpMenos', [`menos do que o solo e as plantas perderam por evaporação (${n0(e)} mm)`, `abaixo da demanda de evaporação do período (${n0(e)} mm)`, `insuficiente para cobrir os ${n0(e)} mm de evapotranspiração`]) : vr('cmpIgual', [`praticamente o mesmo volume perdido por evaporação do solo e das plantas (${n0(e)} mm)`, `em equilíbrio com a evapotranspiração (${n0(e)} mm)`, `volume próximo ao consumido pela evapotranspiração (${n0(e)} mm)`]);
+  const cmp = p > e * 1.15 ? vr('cmpMais', [`acima da demanda de evaporação do período (${n0(e)} mm)`, `com sobra em relação à demanda de evaporação (${n0(e)} mm)`, `mais do que a atmosfera demandou de evaporação no período (${n0(e)} mm)`]) : p < e * .85 ? vr('cmpMenos', [`abaixo da demanda de evaporação do período (${n0(e)} mm)`, `insuficiente para cobrir a demanda de evaporação (${n0(e)} mm)`, `menos do que a atmosfera demandou de evaporação no período (${n0(e)} mm)`]) : vr('cmpIgual', [`praticamente igual à demanda de evaporação do período (${n0(e)} mm)`, `em equilíbrio com a demanda de evaporação (${n0(e)} mm)`, `volume próximo à demanda de evaporação (${n0(e)} mm)`]);
   const bT = Object.fromEntries(blocosTempo(serieT || []).map(b => [b.k, b])), dif = blocosTempo(serie).filter(b => bT[b.k] && bT[b.k].tipo !== b.tipo);
-  const desc = b => ({farta: `a chuva foi farta (${n0(b.p)} mm)`, regular: `choveu de forma regular (${n0(b.p)} mm)`, fraca: `a chuva ficou abaixo do que as lavouras consomem (${n0(b.p)} mm)`, seca: 'o tempo foi seco'})[b.tipo];
+  const desc = b => ({farta: `a chuva foi farta (${n0(b.p)} mm)`, regular: `choveu de forma regular (${n0(b.p)} mm)`, fraca: `a chuva ficou abaixo da demanda de evaporação (${n0(b.p)} mm)`, seca: 'o tempo foi seco'})[b.tipo];
   if (!serieT?.length) return `${historiaTempo(serie)} No período, ${suj} receberam ${n0(p)} mm de chuva, ${cmp}.`;
   if (!dif.length) return vr('tempoIgual', [`A chuva ${onde} seguiu o padrão estadual descrito no panorama e somou ${n0(p)} mm, ${cmp}.`, `${maiusc(suj)} acompanharam o comportamento da chuva no estado, com ${n0(p)} mm no período, ${cmp}.`, `Também ${onde} o tempo seguiu o quadro estadual: foram ${n0(p)} mm, ${cmp}.`]);
   return `${vr('tempoDif', ['Ao contrário da média estadual', 'Diferentemente do restante do estado', 'Em contraste com o quadro estadual'])}, ${dif.map(b => `${b.na} ${desc(b)}`).join('; ')}. No período, ${suj} receberam ${n0(p)} mm, ${cmp}.`;
@@ -2327,7 +2349,7 @@ function historiaTempo(serie) {
   const tipo = b => { const r = b.p / Math.max(1, b.e); return r >= 1.5 ? 'farta' : r >= .8 ? 'regular' : r >= .4 ? 'fraca' : 'seca'; };
   const fr = []; let ant = null;
   blocos.forEach((b, i) => { const t = tipo(b), mm = `${n0(b.p)} mm, distribuídos em ${b.ch} dia${b.ch === 1 ? '' : 's'}`;
-    const desc = {farta: `a chuva foi farta (${mm}), bem acima do que as plantas e o solo perdem por evaporação`, regular: `choveu de forma regular (${mm}), em volume próximo ao que as lavouras consomem`, fraca: `a chuva ficou abaixo do que as lavouras consomem (${mm})`, seca: `o tempo foi seco (${b.p < 1 ? 'praticamente sem chuva' : mm})`}[t];
+    const desc = {farta: `a chuva foi farta (${mm}), bem acima da demanda de evaporação`, regular: `choveu de forma regular (${mm}), em volume próximo à demanda de evaporação`, fraca: `a chuva ficou abaixo da demanda de evaporação (${mm})`, seca: `o tempo foi seco (${b.p < 1 ? 'praticamente sem chuva' : mm})`}[t];
     if (i === 0) fr.push(`${maiusc(naQ(b))}, ${desc}.`);
     else if (t === ant) fr.push(`O padrão se repetiu ${naQ(b)}${b.p >= 1 ? ` (${n0(b.p)} mm)` : ''}.`);
     else fr.push(`${['Já ' + naQ(b), maiusc(naQ(b)), 'Em seguida, ' + naQ(b)][i % 3]}, ${desc}.`);
@@ -2348,15 +2370,23 @@ function restricaoPeriodo(c, cid, ini, dc) {
 // leitura da restrição: quando apareceu, quanto durou, em que fase e o que significa para a produtividade
 function historiaAgua(R, critDe, nomeC, cana) {
   const pas = R.filter(x => !x.prev && x.r != null), fut = R.filter(x => x.prev && x.r != null); if (!pas.length) return {txt: '', dest: null};
-  const ondas = []; let o = null; for (const x of pas) { if (x.r >= 20) { if (!o) ondas.push(o = {a: x, b: x, pico: x}); o.b = x; if (x.r > o.pico.r) o.pico = x; } else o = null; }
+  const ondas0 = []; let o = null; for (const x of pas) { if (x.r >= 20) { if (!o) ondas0.push(o = {a: x, b: x, pico: x}); o.b = x; if (x.r > o.pico.r) o.pico = x; } else o = null; }
+  // episódios separados por até 3 dias de alívio são o mesmo episódio; picos de um ou dois dias abaixo de 30% são oscilação, não episódio
+  const dias = (x, y) => Math.round((deISO(y.d) - deISO(x.d)) / 864e5), ondas1 = [];
+  for (const w of ondas0) { const u = ondas1.at(-1); if (u && dias(u.b, w.a) <= 4) { u.b = w.b; if (w.pico.r > u.pico.r) u.pico = w.pico; } else ondas1.push({...w}); }
+  const relevante = w => dias(w.a, w.b) + 1 >= 3 || w.pico.r >= 30 || w.b === pas.at(-1), ondasR = ondas1.filter(relevante), curtas = ondas1.length - ondasR.length;
+  let ondas = ondasR; if (ondas.length > 3) { const atual = ondas.at(-1).b === pas.at(-1) ? ondas.at(-1) : null, fortes = ondas.filter(w => w !== atual).sort((x, y) => y.pico.r - x.pico.r).slice(0, atual ? 2 : 3); ondas = ondasR.filter(w => w === atual || fortes.includes(w)); }
+  const omitidas = curtas + ondasR.length - ondas.length;
   const fr = [], hoje = pas.at(-1), maxF = fut.length ? fut.reduce((b, x) => x.r > b.r ? x : b) : null; let dest = null;
-  if (!ondas.length) fr.push(vr('aguaOk', [`Ao longo de todo o período, não faltou água para a maior parte das lavouras de ${nomeC}: em nenhum dia mais de 20% da área cultivada ficou com falta de água.`, `O solo manteve água suficiente para ${cana ? 'os canaviais' : `${artigo(nomeC)} ${nomeC}`} durante todo o período; a parcela da área com algum déficit nunca passou de 20%.`, `Em nenhum momento do período a falta de água atingiu mais de 20% da área de ${nomeC}.`]));
-  else { ondas.slice(0, 3).forEach((w, i) => { const dur = Math.round((deISO(w.b.d) - deISO(w.a.d)) / 864e5) + 1, cr = critDe(deISO(w.pico.d));
+  if (!ondas0.length) fr.push(vr('aguaOk', [`Ao longo de todo o período, não faltou água para a maior parte das lavouras de ${nomeC}: em nenhum dia mais de 20% da área cultivada ficou com falta de água.`, `O solo manteve água suficiente para ${cana ? 'os canaviais' : `${artigo(nomeC)} ${nomeC}`} durante todo o período; a parcela da área com algum déficit nunca passou de 20%.`, `Em nenhum momento do período a falta de água atingiu mais de 20% da área de ${nomeC}.`]));
+  else if (!ondas.length) fr.push(`A falta de água apareceu apenas em oscilações breves, de um ou dois dias, sem atingir mais de 30% da área${cana ? ' dos canaviais' : ''}.`);
+  else { ondas.forEach((w, i) => { const dur = Math.round((deISO(w.b.d) - deISO(w.a.d)) / 864e5) + 1, cr = critDe(deISO(w.pico.d));
       const desdeIni = w.a === pas[0], ateHoje = w.b === pas.at(-1);
       fr.push(`${desdeIni ? `${vr('ondaIni', ['A falta de água já estava presente no início do período', 'O período começou com o solo já em déficit', 'Desde o início do período o solo estava abaixo do nível adequado'])} e ${ateHoje ? 'continua até hoje' : `durou ${dur} dia${dur === 1 ? '' : 's'}`}` : `${i === 0 ? vr('onda1', ['A falta de água começou a aparecer', 'O primeiro déficit hídrico relevante surgiu', 'O solo começou a secar de forma importante']) : vr('onda2', ['Um novo período de falta de água começou', 'O déficit voltou', 'Houve nova restrição'])} em ${dExt(deISO(w.a.d))} e ${ateHoje ? 'continua até hoje' : `durou ${dur} dia${dur === 1 ? '' : 's'}`}`}. ${vr('pior', [`No pior momento, em ${dExt(deISO(w.pico.d))}, atingiu ${n0(w.pico.r)}% da área cultivada`, `O ponto mais crítico foi ${dExt(deISO(w.pico.d))}, com ${n0(w.pico.r)}% da área afetada`, `Em ${dExt(deISO(w.pico.d))}, auge do problema, ${n0(w.pico.r)}% da área estava com falta de água`])}${w.pico.sev >= 5 ? `, sendo ${n0(w.pico.sev)}% em nível moderado ou severo` : ''}${cr >= 10 ? `, justamente quando cerca de ${n0(cr)}% da área atravessava fases críticas` : ''}.`); });
-    if (ondas.length > 3) fr.push(`Houve ainda outros ${ondas.length - 3} episódios menores.`); }
+    if (omitidas) fr.push(omitidas === 1 ? 'Houve ainda uma oscilação breve, de menor intensidade.' : `Houve ainda ${omitidas} oscilações breves, de menor intensidade.`); }
   fr.push(hoje.r >= 5 ? vr('aguaHoje', [`Hoje, ${n0(hoje.r)}% da área cultivada está com alguma falta de água.`, `Na data deste resumo, a falta de água atinge ${n0(hoje.r)}% da área.`, `Atualmente, ${n0(hoje.r)}% da área está abaixo do nível de água adequado.`]) : vr('aguaHojeOk', ['Hoje, o solo tem água suficiente para praticamente toda a área cultivada.', 'Na data deste resumo, a reserva de água atende praticamente toda a área.', 'A situação atual é confortável, sem restrição relevante.']));
   if (maxF) fr.push(maxF.r > hoje.r + 5 ? `A previsão indica piora, com até ${n0(maxF.r)}% da área com falta de água por volta de ${dExt(deISO(maxF.d))}.`
+    : maxF.r >= 20 && maxF.r < hoje.r - 10 ? `A previsão indica alívio parcial: no pior dia dos próximos 15, a parcela com falta de água fica em torno de ${n0(maxF.r)}%.`
     : maxF.r >= 20 ? `A previsão indica que o quadro deve continuar nos próximos dias, com cerca de ${n0(maxF.r)}% da área nessa situação.`
     : hoje.r >= 20 ? 'A previsão indica melhora nos próximos dias, com a volta da chuva.' : vr('aguaPrev', ['A previsão dos próximos dias não indica falta de água relevante.', 'Para os próximos dias, a previsão não aponta restrição importante.', 'A chuva prevista deve manter esse quadro.']));
   // efeito provável na safra
@@ -2364,7 +2394,7 @@ function historiaAgua(R, critDe, nomeC, cana) {
   let ef;
   if (cana) ef = !pico ? 'Para a cana, isso significa crescimento dos colmos sem freio hídrico, bom sinal para a produtividade da próxima colheita.'
     : [4, 5, 6, 7].includes(deISO(pico.pico.d).getMonth()) ? 'Na cana, a restrição na época seca é esperada e até ajuda a concentrar açúcar e a manter o ritmo do corte; o risco está em se prolongar a ponto de comprometer a rebrota das soqueiras.'
-    : [8, 9, 10].includes(deISO(pico.pico.d).getMonth()) ? 'Entre setembro e novembro, com a volta das chuvas, as soqueiras colhidas no inverno estão rebrotando: falta de água nessa fase atrasa a brotação e o perfilhamento e pode reduzir a tonelagem da próxima safra, sobretudo nos solos arenosos. Nos canaviais recém-colhidos, porém, a demanda de água ainda é baixa, e o balanço tende a superestimar a falta de água.'
+    : [8, 9, 10].includes(deISO(pico.pico.d).getMonth()) ? 'Entre setembro e novembro, com a volta das chuvas, as soqueiras colhidas no inverno estão rebrotando: falta de água nessa fase atrasa a brotação e o perfilhamento e pode reduzir a tonelagem da próxima safra, sobretudo nos solos arenosos.'
     : 'Na cana, falta de água fora da época seca freia o crescimento dos colmos e tende a reduzir a tonelagem por hectare da próxima colheita, sobretudo nos solos arenosos.';
   else if (!pico && !(maxF && maxF.r >= 20)) ef = vr('efOk', ['Do ponto de vista da água, o potencial produtivo segue preservado até aqui.', 'A disponibilidade de água não impôs perdas ao potencial produtivo até agora.', 'Sem falta de água relevante, o clima não é, por ora, um fator de perda para a cultura.']);
   else if (pico && crP < 10 && !(maxF && maxF.r >= 20 && crF >= 10)) ef = 'Como a falta de água pegou as lavouras ainda no início do ciclo, quando a planta exige pouca água e se recupera bem com a volta da chuva, o efeito sobre a produtividade tende a ser pequeno; o ponto de atenção é o estande, com possíveis falhas de germinação nos solos arenosos.';
@@ -2494,7 +2524,7 @@ async function analisePDFCultura(c, s, n, ini, fim, dias, opts) {
   if (ult) { let t = vr('ult', [`Em ${dExt(ult.d)}, ${n0(ult.pl)}% da área estava semeada`, `A última informação disponível, de ${dExt(ult.d)}, aponta ${n0(ult.pl)}% da área semeada`, `Até ${dExt(ult.d)}, a semeadura cobria ${n0(ult.pl)}% da área`]);
     if (ult.ant != null) { const dl = ult.pl - ult.ant; t += Math.abs(dl) < 3 ? `, praticamente o mesmo da safra passada na mesma data (${n0(ult.ant)}%)` : `, ${dl > 0 ? 'à frente' : 'atrás'} da safra passada, que na mesma data tinha ${n0(ult.ant)}%`; a.destAnt = Math.abs(dl) >= 5 ? `${dl > 0 ? 'à frente' : 'atrás'} da safra passada (${n0(ult.ant)}%)` : null; }
     fr.push(t + '.');
-    if (a.parcial) { const P = a.parcial; fr.push(`A semana de ${dExt(P.d)} ainda está incompleta: só ${P.n} município${P.n > 1 ? 's' : ''} (${n0(100 * P.cob)}% da área) ${P.n > 1 ? 'foram informados' : 'foi informado'}${P.v != null && P.v0 != null ? `, e neles a semeadura passou de ${n0(P.v0)}% para ${n0(P.v)}%` : ''}. Por isso, os números do estado vão até ${dExt(ult.d)}.`); }
+    if (a.parcial) { const P = a.parcial; fr.push(`A semana de ${dExt(P.d)} ainda está em preenchimento pela equipe: até agora, ${P.n} município${P.n > 1 ? 's' : ''} (${n0(100 * P.cob)}% da área) ${P.n > 1 ? 'foram informados' : 'foi informado'}${P.v != null && P.v0 != null ? `, e neles a semeadura passou de ${n0(P.v0)}% para ${n0(P.v)}%` : ''}. Por isso, os números do estado vão até ${dExt(ult.d)}.`); }
     if (u2 && ult.pl < 95) { const rit = (ult.pl - u2.pl) / 2; if (rit >= 1) { const alvo = ult.pl < 85 ? 90 : 100; a.dFim = addD(ult.d, 7 * Math.ceil((alvo - ult.pl) / rit)); a.alvo = alvo; a.ritmo = rit;
       const J = fimJanela(cid, c.inicio), dJ = J ? (J.data - a.dFim) / 864e5 : null;
       fr.push(`${vr('ritmo', [`Mantido o ritmo recente, de cerca de ${n0(rit)} pontos percentuais por semana, a semeadura deve chegar a ${alvo}% ${dAprox(a.dFim)}`, `No passo das duas últimas semanas, perto de ${n0(rit)} pontos percentuais por semana, os ${alvo}% seriam alcançados ${dAprox(a.dFim)}`, `Se o avanço seguir a média recente (cerca de ${n0(rit)} pontos por semana), a área semeada chega a ${alvo}% ${dAprox(a.dFim)}`])}${J ? (dJ >= 0 ? `, ${dJ >= 30 ? J.comFolga : J.dentro}` : `. Nesse ritmo, parte da área seria semeada ${J.apos}, ${J.risco}`) : ''}.`);
@@ -2513,7 +2543,7 @@ async function analisePDFCultura(c, s, n, ini, fim, dias, opts) {
   a.txtPlantio = fr.join(' ');
   // --- tempo e água
   if (a.serie?.length) { const p = a.serie.reduce((t, x) => t + x.p, 0), e = a.serie.reduce((t, x) => t + x.e, 0); a.chuvaTot = p;
-    a.txtTempo = `${historiaTempo(a.serie)} No balanço do período, choveu ${n0(p)} mm nas áreas de ${nomeC}, ${p > e * 1.15 ? 'mais do que' : p < e * .85 ? 'menos do que' : 'praticamente o mesmo que'} o solo e as plantas perderam por evaporação (${n0(e)} mm).`; }
+    a.txtTempo = `${historiaTempo(a.serie)} No balanço do período, choveu ${n0(p)} mm nas áreas de ${nomeC}, ${p > e * 1.15 ? 'acima da' : p < e * .85 ? 'abaixo da' : 'praticamente igual à'} demanda de evaporação (${n0(e)} mm).`; }
   // --- o que vem pela frente
   const cal = calendarioCritico(c, serieEstado(c)).filter(x => x[1] && x[1] >= addD(HOJE, -3)); let crit3 = 0; for (let j = semanaDe(c, HOJE); j <= semanaDe(c, HOJE) + 3; j++) crit3 = Math.max(crit3, mediaMS(c, m => pctCritico(c, m, j))?.v || 0);
   const dist = new Array(c.estadios.length).fill(0); let sw = 0; const jh = semanaDe(c, HOJE);
@@ -2551,7 +2581,7 @@ async function analisePDFCana(ini, fim, dias, opts) {
   a.txtArea = `O mapeamento da Aprosoja-MS identifica ${haTxt(a.area)} de cana em ${a.nMun} municípios. A cultura se concentra nas regiões de ${lista(top.map(([r]) => r))}, que somam ${n0(100 * top.reduce((t, x) => t + x[1], 0) / a.area)}% da área; os maiores municípios são ${lista(l.sort((x, y) => y[1].area - x[1].area).slice(0, 3).map(([cd]) => nmMun(cd)))}.`;
   if (opts.clima) { const dc = await climaDiario(addD(ini, -30), addD(HOJE, 16)); a.serie = serieDias(dc, pesos, ini, fim < HOJE ? fim : addD(HOJE, -1));
     a.R = restricaoPeriodo(c, 'cana', ini, dc).filter(x => deISO(x.d) <= addD(fim > HOJE ? fim : HOJE, 15)); a.agua = historiaAgua(a.R, () => 0, 'cana', true);
-    if (a.serie.length) { const p = a.serie.reduce((t, x) => t + x.p, 0), e = a.serie.reduce((t, x) => t + x.e, 0); a.chuvaTot = p; a.txtTempo = `${historiaTempo(a.serie)} No balanço do período, choveu ${n0(p)} mm nos canaviais, ${p > e * 1.15 ? 'mais do que' : p < e * .85 ? 'menos do que' : 'praticamente o mesmo que'} o solo e as plantas perderam por evaporação (${n0(e)} mm).`; } }
+    if (a.serie.length) { const p = a.serie.reduce((t, x) => t + x.p, 0), e = a.serie.reduce((t, x) => t + x.e, 0); a.chuvaTot = p; a.txtTempo = `${historiaTempo(a.serie)} No balanço do período, choveu ${n0(p)} mm nos canaviais, ${p > e * 1.15 ? 'acima da' : p < e * .85 ? 'abaixo da' : 'praticamente igual à'} demanda de evaporação (${n0(e)} mm).`; } }
   // relatos de cana: os do período ou, se não houver, os dos últimos seis meses (o levantamento de cana é menos frequente)
   const noP = r => r.data >= ini && r.data <= addD(fim, 1), recente = r => r.data >= addD(fim < HOJE ? fim : HOJE, -200) && r.data <= addD(fim, 1);
   const relCana = RELATOS.filter(ehRelCana), ultimoC = relCana.filter(r => r.data <= addD(fim, 1) && r.data >= addD(fim, -365)).sort((p, q) => q.data - p.data)[0];
@@ -2586,6 +2616,9 @@ function graficoSemeaduraPDF(doc, a, ctx) {
   const gx = M + 8, gy = ctx.y() + 2, gw = W - 2 * M - 16, X = j => gx + (j - .5) * gw / nS, bw = gw / nS * .58, Y = v => gy + gh - Math.max(0, Math.min(100, v)) / 100 * gh;
   const mInc = Math.max(8, Math.ceil(Math.max(...S.map(x => x.inc || 0)) * 1.15 / 4) * 4), YI = v => gy + gh - v / mInc * gh;
   doc.setDrawColor(232); doc.setLineWidth(.15); [0, 50, 100].forEach(v => { doc.line(gx, Y(v), gx + gw, Y(v)); doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.setTextColor(...CINZA); doc.text(v + '%', gx - 1.5, Y(v) + 1, {align: 'right'}); });
+  // eixo próprio das barras semanais, à direita (escala diferente da linha acumulada)
+  doc.setFontSize(6); doc.setTextColor(70, 120, 70); [0, mInc / 2, mInc].forEach(v => doc.text(String(Math.round(v)), gx + gw + 1.5, YI(v) + 1));
+  doc.text('p.p.', gx + gw + 1.5, gy - 1.8); doc.setTextColor(...CINZA); doc.text('acum.', gx - 1.5, gy - 1.8, {align: 'right'});
   S.forEach(x => { if (!(x.inc > 0)) return; doc.setFillColor(168, 205, 160); doc.rect(X(x.j) - bw / 2, YI(x.inc), bw, gy + gh - YI(x.inc), 'F'); if (x.inc >= 1.5) { doc.setFontSize(6); doc.setTextColor(70, 120, 70); doc.text(x.inc.toFixed(0), X(x.j), YI(x.inc) - .8, {align: 'center'}); } });
   const linha = (pts, cor, lw, dash) => { doc.setDrawColor(...cor); doc.setLineWidth(lw); if (dash) doc.setLineDashPattern(dash, 0); for (let i = 1; i < pts.length; i++) if (pts[i - 1] && pts[i] && [...pts[i - 1], ...pts[i]].every(Number.isFinite)) doc.line(...pts[i - 1], ...pts[i]); doc.setLineDashPattern([], 0); };
   if (a.temAnt) linha(S.map(x => x.ant == null ? null : [X(x.j), Y(x.ant)]), [160, 160, 160], .5, [1.5, 1]);
@@ -2598,7 +2631,7 @@ function graficoSemeaduraPDF(doc, a, ctx) {
   doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.setTextColor(...CINZA); const passo = Math.ceil(nS / 9);
   S.forEach((x, i) => { if (i % passo === 0) doc.text(fmtD(x.d).slice(0, 5), X(x.j), yb + 3.3, {align: 'center'}); });
   const jh = semanaDe(a.c, HOJE); if (jh >= 1 && jh <= nS) { doc.setDrawColor(150); doc.setLineWidth(.2); doc.setLineDashPattern([.6, .8], 0); doc.line(X(jh), gy, X(jh), yb); doc.setLineDashPattern([], 0); doc.text('hoje', X(jh) + .8, gy + 2.2); }
-  const leg = [['b', [168, 205, 160], '% semeado na semana'], ['l', [47, 107, 58], '% semeado acumulado']]; if (a.temAnt) leg.push(['t', [160, 160, 160], `safra ${safraAnterior(a.s)}`]); if (a.semClima) leg.push(['b', [110, 160, 210], 'chuva na semana (mm)']);
+  const leg = [['b', [168, 205, 160], 'semeado na semana (p.p., eixo à direita)'], ['l', [47, 107, 58], '% semeado acumulado (eixo à esquerda)']]; if (a.temAnt) leg.push(['t', [160, 160, 160], `safra ${safraAnterior(a.s)}`]); if (a.semClima) leg.push(['b', [110, 160, 210], 'chuva na semana (mm)']);
   legendaPDF(doc, leg, gx, yb + 8, CINZA); ctx.setY(yb + 13);
 }
 function graficoRestricaoPDF(doc, a, ctx) {
@@ -2668,7 +2701,7 @@ async function gerarPDF(ini, fim, sel, opts) {
   const serieT = opts.clima ? serieDias(dias, pesosT, ini, fim < HOJE ? fim : addD(HOJE, -1)) : [];
   h2('Panorama');
   if (serieT.length) { const p = serieT.reduce((t, x) => t + x.p, 0), e = serieT.reduce((t, x) => t + x.e, 0);
-    txt(`Entre ${dExt(ini)} e ${dExt(fim)}, as áreas agrícolas do estado receberam em média ${n0(p)} mm de chuva, ${p > e * 1.15 ? 'mais do que' : p < e * .85 ? 'menos do que' : 'praticamente o mesmo que'} o solo e as plantas perderam por evaporação no mesmo período (${n0(e)} mm). ${historiaTempo(serieT)}`); }
+    txt(`Entre ${dExt(ini)} e ${dExt(fim)}, as áreas agrícolas do estado receberam em média ${n0(p)} mm de chuva, ${p > e * 1.15 ? 'acima da' : p < e * .85 ? 'abaixo da' : 'praticamente igual à'} demanda de evaporação do período (${n0(e)} mm, a evapotranspiração de referência, que indica quanto um gramado bem regado perderia de água). ${historiaTempo(serieT)}`); }
   txt(A.map(a => a.manchete).join(' '));
   A.forEach(a => { if (a.serie?.length) a.txtTempo = tempoRelativo(a.serie, serieT, a.cana ? 'os canaviais' : `as áreas de ${a.nomeC}`, a.cana ? 'nos canaviais' : `nas áreas de ${a.nomeC}`); });
   y += 2;
@@ -2725,13 +2758,16 @@ async function gerarPDF(ini, fim, sel, opts) {
     if (opts.campo && a.rels.length) tabela(['Data', 'Relatório de viagem', 'Municípios citados'], a.rels.map(r => [fmtD(r.data), r.nome.replace(/\.(docx?|odt|rtf|pdf|txt|md)$/i, ''), [...r.muns].map(nmMun).filter(Boolean).join(', ') || '—']), {columnStyles: {0: {cellWidth: 16}, 1: {cellWidth: 55}}});
     if (opts.mun && !a.cana) { const js = Array.from({length: Math.min(22, Math.max(1, a.jbT || a.jb))}, (_, k) => k + 1).filter(k => k >= Math.max(1, a.ja - 1));
       sub2('Evolução da semeadura por município');
-      nota(`Cada coluna de data mostra o percentual da área do município já semeado até aquela semana (valor acumulado). Uma célula vazia indica que não houve informação naquela semana. A última coluna traz a parcela da área que estava em fase crítica em ${fmtD(fim)}, segundo o calendário médio da cultura.`);
-      tabela(['Município', 'Área (ha)', ...js.map(k => fmtD(dataSem(a.c, k)).slice(0, 5)), 'Em fase crítica'], Object.entries(a.c.mun).sort((x, y) => (nmMun(x[0]) || '').localeCompare(nmMun(y[0]) || '', 'pt')).map(([cd, m]) => [nmMun(cd) || cd, m.area ? n0(m.area) : '—', ...js.map(k => m.serie[k - 1] == null ? '' : String(Math.round(m.serie[k - 1]))), pctCritico(a.c, m, a.jb).toFixed(0) + '%']), {styles: {font: 'helvetica', fontSize: 6.3, cellPadding: .7, textColor: TINTA, lineColor: [235, 235, 230], lineWidth: {bottom: .1}}});
+      nota(`Cada coluna de data mostra o percentual da área do município já semeado até aquela semana (valor acumulado). Uma célula vazia indica que não houve informação naquela semana. A última coluna traz a parcela da área que estava em fase crítica em ${fmtD(fim)}, segundo o calendário médio da cultura.${Object.keys(a.c.mun).length > 25 ? ' Municípios com menos de 1% da área da cultura aparecem somados na última linha.' : ''}`);
+      tabela(['Município', 'Área (ha)', ...js.map(k => fmtD(dataSem(a.c, k)).slice(0, 5)), 'Em fase crítica'], (() => { const ent = Object.entries(a.c.mun), tA = ent.reduce((t, [, m]) => t + (m.area || 0), 0), grande = ([, m]) => !tA || ent.length <= 25 || (m.area || 0) >= .01 * tA;   // municípios com menos de 1% da área vão somados numa linha
+        const lin = ent.filter(grande).sort((x, y) => (nmMun(x[0]) || '').localeCompare(nmMun(y[0]) || '', 'pt')).map(([cd, m]) => [nmMun(cd) || cd, m.area ? n0(m.area) : '—', ...js.map(k => m.serie[k - 1] == null ? '' : String(Math.round(m.serie[k - 1]))), pctCritico(a.c, m, a.jb).toFixed(0) + '%']);
+        const resto = ent.filter(e => !grande(e)); if (resto.length) { const sub = {mun: Object.fromEntries(resto)}; lin.push([`Demais ${resto.length} municípios (média ponderada)`, n0(resto.reduce((t, [, m]) => t + (m.area || 0), 0)), ...js.map(k => n0(mediaMS(sub, m => acum(m.serie, k))?.v ?? 0)), n0(mediaMS(sub, m => pctCritico(a.c, m, a.jb))?.v ?? 0) + '%']); }
+        return lin; })(), {styles: {font: 'helvetica', fontSize: 6.3, cellPadding: .7, textColor: TINTA, lineColor: [235, 235, 230], lineWidth: {bottom: .1}}});
     }
     if (opts.mun && a.cana) { sub2('Área de cana por município'); tabela(['Município', 'Região imediata', 'Área de cana (ha)', '% da cana do MS'], Object.entries(a.c.mun).filter(([cd]) => MUN_IDX[cd]).sort((x, y) => nmMun(x[0]).localeCompare(nmMun(y[0]), 'pt')).map(([cd, m]) => [nmMun(cd), MUN_IDX[cd].properties.NM_RGI || '—', n0(m.area), n1(100 * m.area / a.area) + '%']), {styles: {font: 'helvetica', fontSize: 6.5, cellPadding: .8, textColor: TINTA, lineColor: [235, 235, 230], lineWidth: {bottom: .1}}}); }
   }
   h2('Como os números foram obtidos');
-  nota('Semeadura: planilha semanal da SEGEO-MS; percentuais do estado e das regiões ponderados pela área informada. Estádios e fases críticas: projeção pelo calendário médio da aba Parâmetros (dias após a semeadura), sem graus-dia. Clima por município no ponto central: histórico com reanálise ERA5 e, nos dias recentes e na previsão, modelos numéricos (Open-Meteo, média de até seis modelos), com evapotranspiração ajustada pelas estações do INMET. Falta de água: balanço hídrico diário do solo (FAO-56), com reserva de água estimada pela textura do solo nas áreas da cultura e demanda pela fase da lavoura; "falta de água" = coeficiente de estresse Ks abaixo de 1 (leve 0,7-0,99; moderada 0,4-0,7; severa abaixo de 0,4), em % da área com lavoura em campo. Relatórios de viagem lidos por regras automáticas e cruzados com a planilha, o clima e os mapas de uso; confira o texto original. ' + (A.some(a => a.cana) ? `Cana: área do mapeamento de uso e cobertura da Aprosoja-MS 2025/26, Kc médio anual de ${n2(KC_CANA)}, raízes até ${PROF_CANA} cm. ` : '') + 'Os indicadores apontam situações a verificar e não representam estimativa oficial de área, produtividade ou produção.');
+  nota('Semeadura: planilha semanal da SEGEO-MS; percentuais do estado e das regiões ponderados pela área informada. Estádios e fases críticas: projeção pelo calendário médio da aba Parâmetros (dias após a semeadura), sem graus-dia. Clima por município no ponto central: histórico com reanálise ERA5 e, nos dias recentes e na previsão, modelos numéricos (Open-Meteo, média de até seis modelos), com evapotranspiração ajustada pelas estações do INMET. Falta de água: balanço hídrico diário do solo (FAO-56), com reserva de água estimada pela textura do solo nas áreas da cultura e demanda pela fase da lavoura; "falta de água" = coeficiente de estresse Ks abaixo de 1 (leve 0,7-0,99; moderada 0,4-0,7; severa abaixo de 0,4), em % da área com lavoura em campo. Relatórios de viagem lidos por regras automáticas e cruzados com a planilha, o clima e os mapas de uso; confira o texto original. ' + (A.some(a => a.cana) ? `Cana: área do mapeamento de uso e cobertura da Aprosoja-MS 2025/26, Kc da soqueira pela idade desde o corte (FAO-56), ponderado pelo calendário de colheita das usinas, raízes até ${PROF_CANA} cm. ` : '') + 'Os indicadores apontam situações a verificar e não representam estimativa oficial de área, produtividade ou produção.');
   const tot = doc.getNumberOfPages();
   for (let i = 1; i <= tot; i++) { doc.setPage(i); doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(...CINZA);
     doc.text('Painel de Levantamento de Safras MS · dados preliminares', M, 288); doc.text(`${i} / ${tot}`, W - M, 288, {align: 'right'}); }
