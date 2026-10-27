@@ -2125,7 +2125,7 @@ async function prosaRelatosCana(filtro, R) {
     const mS = rel.texto.match(/safra[^.\n]{0,40}?(20\d{2})\s*\/\s*(20\d{2}|\d{2})/i), safraRel = mS ? `${mS[1]}/${mS[2].slice(-2)}` : null;
     const usR = R ? R.usinas.filter(u => u.cd && escp.includes(u.cd) && u.temCanaAlgum) : [], outraSafra = R && safraRel && safraRel !== R.safra;
     const passada = outraSafra ? 'na safra passada' : 'na mesma safra', passadaDa = outraSafra ? 'da safra passada' : 'da mesma safra';
-    const p1 = [`${quando}, a equipe visitou usinas de açúcar e etanol em ${lista(escp.map(nmMun).filter(Boolean))}${safraRel ? `, no levantamento da safra ${safraRel}` : ''}.${outraSafra ? ` Como as planilhas mais recentes das usinas são da safra ${R.safra}, elas servem aqui apenas como referência do que é habitual para essas unidades.` : ''}`];
+    const p1 = [`${quando}, ${vr('visitaUsina', ['a equipe visitou usinas de açúcar e etanol em', 'o levantamento passou pelas usinas de', 'a equipe esteve nas usinas de'])} ${lista(escp.map(nmMun).filter(Boolean))}${safraRel ? `, no levantamento da safra ${safraRel}` : ''}.${outraSafra ? ` Como as planilhas mais recentes das usinas são da safra ${R.safra}, elas servem aqui apenas como referência do que é habitual para essas unidades.` : ''}`];
     // colheita: relato × calendário das mesmas usinas
     const co = um1('colheita'), ce = um1('colheitaEsperada'), ac = um1('atrasoColheita'), cm = um1('climaMes');
     if (co) { let t = `A colheita estava ${ac || (ce && ce.pct > co.pct) ? 'atrasada' : 'em andamento'}: ${n0(co.pct)}% da área havia sido colhida${ce ? `, quando o normal para a época seria ${ce.pct === 50 ? 'cerca de metade' : `${n0(ce.pct)}%`}, segundo as usinas` : ''}${cm?.acima ? `, por causa das chuvas acima da média de ${MESES_EXT[cm.mes]}` : ''}.`;
@@ -2140,7 +2140,7 @@ async function prosaRelatosCana(filtro, R) {
     if (cm && i1ok(ano, cm.mes)) { const i0 = new Date(ano, cm.mes, 1, 12), i1 = new Date(ano, cm.mes + 1, 0, 12), dc = await climaDiario(i0, i1), sr = serieDias(dc, Object.fromEntries(escp.map(cd => [cd, 1])), i0, i1);
       const hs = usR.map(u => u.chuvaHist?.[cm.mes]).filter(v => v > 0), h = hs.length ? hs.reduce((a, b) => a + b, 0) / hs.length : null;
       if (sr.length >= 25 && h) { const p = sr.reduce((t, x) => t + x.p, 0), dch = sr.filter(x => x.p >= 1).length;
-        if (!cm.acima || p >= h * 1.2) p1.push(`Os dados de clima confirmam: em ${MESES_EXT[cm.mes]} choveu ${n0(p)} mm nesses municípios, ${p >= h ? `${n1(p / h).replace(',0', '')} vez${p / h >= 1.95 ? 'es' : ''} a média histórica informada pelas usinas` : `${n0(100 * p / h)}% da média`}.`);
+        if (!cm.acima || p >= h * 1.2) p1.push(`${vr('confClima', ['O clima confirma o relato', 'Os registros de chuva sustentam a observação', 'A informação é compatível com os dados de clima'])}: em ${MESES_EXT[cm.mes]} choveu ${n0(p)} mm nesses municípios, ${p >= h ? `${n1(p / h).replace(',0', '')} vez${p / h >= 1.95 ? 'es' : ''} a média histórica informada pelas usinas` : `${n0(100 * p / h)}% da média`}.`);
         else if (dch >= 12) p1.push(`No total do mês, os dados de clima mostram ${n0(p)} mm, perto da média de ${n0(h)} mm informada pelas usinas, mas distribuídos em ${dch} dias. Para a colheita, o que pesa é a frequência da chuva, que interrompe as máquinas e encharca os carreadores, mais do que o volume: o relato é coerente com essa distribuição.`);
         else p1.push(`Os dados de clima, por sua vez, não mostram um ${MESES_EXT[cm.mes]} chuvoso (${n0(p)} mm, contra média de ${n0(h)} mm, em ${dch} dias). Como o dado vem de um modelo, com pontos espaçados de 10 a 25 km, chuvas localizadas sobre as áreas das usinas podem não aparecer; o resumo mantém a informação de campo, que é observação direta, mas ela merece confirmação nas próximas visitas.`); } }
     // qualidade
@@ -2242,6 +2242,24 @@ function serieDias(dias, pesos, ini, fim) {
   return out;
 }
 // história do tempo por quinzena, em texto corrido
+// variação de redação: cada padrão de frase gira entre alternativas equivalentes, para o texto não repetir a mesma fórmula
+let ROT_TXT = {}, JA_DITO = new Set();
+const vr = (k, ops) => { const i = ROT_TXT[k] = (ROT_TXT[k] ?? -1) + 1; return ops[i % ops.length]; };
+function blocosTempo(serie) {
+  const q = []; for (const x of serie.filter(x => !x.prev)) { const dt = deISO(x.d), k = `${x.d.slice(0, 7)}-${dt.getDate() <= 15 ? 1 : 2}`;
+    if (!q.length || q.at(-1).k !== k) q.push({k, ini: dt, p: 0, e: 0, ch: 0, n: 0}); const b = q.at(-1); b.p += x.p; b.e += x.e; b.n++; if (x.p >= 1) b.ch++; }
+  return q.filter(b => b.n >= 5).map(b => { const r = b.p / Math.max(1, b.e); return {...b, nome: `${b.ini.getDate() <= 15 ? 'primeira' : 'segunda'} quinzena de ${MESES_EXT[b.ini.getMonth()]}`, tipo: r >= 1.5 ? 'farta' : r >= .8 ? 'regular' : r >= .4 ? 'fraca' : 'seca'}; });
+}
+// tempo de uma cultura contado em relação ao panorama estadual: só o que difere, sem repetir a história das quinzenas
+function tempoRelativo(serie, serieT, suj, onde) {
+  if (!serie?.length) return ''; const p = serie.reduce((t, x) => t + x.p, 0), e = serie.reduce((t, x) => t + x.e, 0);
+  const cmp = p > e * 1.15 ? `mais do que o solo e as plantas perderam por evaporação (${n0(e)} mm)` : p < e * .85 ? `menos do que o solo e as plantas perderam por evaporação (${n0(e)} mm)` : `praticamente o mesmo volume perdido por evaporação do solo e das plantas (${n0(e)} mm)`;
+  const bT = Object.fromEntries(blocosTempo(serieT || []).map(b => [b.k, b])), dif = blocosTempo(serie).filter(b => bT[b.k] && bT[b.k].tipo !== b.tipo);
+  const desc = b => ({farta: `a chuva foi farta (${n0(b.p)} mm)`, regular: `choveu de forma regular (${n0(b.p)} mm)`, fraca: `a chuva ficou abaixo do que as lavouras consomem (${n0(b.p)} mm)`, seca: 'o tempo foi seco'})[b.tipo];
+  if (!serieT?.length) return `${historiaTempo(serie)} No período, ${suj} receberam ${n0(p)} mm de chuva, ${cmp}.`;
+  if (!dif.length) return vr('tempoIgual', [`A chuva ${onde} seguiu o padrão estadual descrito no panorama e somou ${n0(p)} mm, ${cmp}.`, `${maiusc(suj)} acompanharam o comportamento da chuva no estado, com ${n0(p)} mm no período, ${cmp}.`, `Também ${onde} o tempo seguiu o quadro estadual: foram ${n0(p)} mm, ${cmp}.`]);
+  return `${vr('tempoDif', ['Ao contrário da média estadual', 'Diferentemente do restante do estado', 'Em contraste com o quadro estadual'])}, ${dif.map(b => `na ${b.nome} ${desc(b)}`).join('; ')}. No período, ${suj} receberam ${n0(p)} mm, ${cmp}.`;
+}
 function historiaTempo(serie) {
   const q = []; for (const x of serie.filter(x => !x.prev)) { const dt = deISO(x.d), k = `${x.d.slice(0, 7)}-${dt.getDate() <= 15 ? 1 : 2}`;
     if (!q.length || q.at(-1).k !== k) q.push({k, ini: dt, p: 0, e: 0, ch: 0, n: 0}); const b = q.at(-1); b.p += x.p; b.e += x.e; b.n++; if (x.p >= 1) b.ch++; }
@@ -2273,22 +2291,22 @@ function historiaAgua(R, critDe, nomeC, cana) {
   const pas = R.filter(x => !x.prev && x.r != null), fut = R.filter(x => x.prev && x.r != null); if (!pas.length) return {txt: '', dest: null};
   const ondas = []; let o = null; for (const x of pas) { if (x.r >= 20) { if (!o) ondas.push(o = {a: x, b: x, pico: x}); o.b = x; if (x.r > o.pico.r) o.pico = x; } else o = null; }
   const fr = [], hoje = pas.at(-1), maxF = fut.length ? fut.reduce((b, x) => x.r > b.r ? x : b) : null; let dest = null;
-  if (!ondas.length) fr.push(`Ao longo de todo o período, não faltou água para a maior parte das lavouras de ${nomeC}: em nenhum dia mais de 20% da área cultivada ficou com falta de água.`);
+  if (!ondas.length) fr.push(vr('aguaOk', [`Ao longo de todo o período, não faltou água para a maior parte das lavouras de ${nomeC}: em nenhum dia mais de 20% da área cultivada ficou com falta de água.`, `O solo manteve água suficiente para ${cana ? 'os canaviais' : `a ${nomeC}`} durante todo o período; a parcela da área com algum déficit nunca passou de 20%.`, `Em nenhum momento do período a falta de água atingiu mais de 20% da área de ${nomeC}.`]));
   else { ondas.slice(0, 3).forEach((w, i) => { const dur = Math.round((deISO(w.b.d) - deISO(w.a.d)) / 864e5) + 1, cr = critDe(deISO(w.pico.d));
       const desdeIni = w.a === pas[0], ateHoje = w.b === pas.at(-1);
       fr.push(`${desdeIni ? `A falta de água já estava presente no início do período e ${ateHoje ? 'continua até hoje' : `durou ${dur} dia${dur === 1 ? '' : 's'}`}` : `${i === 0 ? 'A falta de água começou a aparecer' : 'Um novo período de falta de água começou'} em ${dExt(deISO(w.a.d))} e ${ateHoje ? 'continua até hoje' : `durou ${dur} dia${dur === 1 ? '' : 's'}`}`}. No pior momento, em ${dExt(deISO(w.pico.d))}, atingiu ${n0(w.pico.r)}% da área cultivada${w.pico.sev >= 5 ? `, sendo ${n0(w.pico.sev)}% em nível moderado ou severo` : ''}${cr >= 10 ? `, justamente quando cerca de ${n0(cr)}% da área atravessava fases críticas` : ''}.`); });
     if (ondas.length > 3) fr.push(`Houve ainda outros ${ondas.length - 3} episódios menores.`); }
-  fr.push(hoje.r >= 5 ? `Hoje, ${n0(hoje.r)}% da área cultivada está com alguma falta de água.` : 'Hoje, o solo tem água suficiente para praticamente toda a área cultivada.');
+  fr.push(hoje.r >= 5 ? vr('aguaHoje', [`Hoje, ${n0(hoje.r)}% da área cultivada está com alguma falta de água.`, `Na data deste resumo, a falta de água atinge ${n0(hoje.r)}% da área.`, `Atualmente, ${n0(hoje.r)}% da área está abaixo do nível de água adequado.`]) : vr('aguaHojeOk', ['Hoje, o solo tem água suficiente para praticamente toda a área cultivada.', 'Na data deste resumo, a reserva de água atende praticamente toda a área.', 'A situação atual é confortável, sem restrição relevante.']));
   if (maxF) fr.push(maxF.r > hoje.r + 5 ? `A previsão indica piora, com até ${n0(maxF.r)}% da área com falta de água por volta de ${dExt(deISO(maxF.d))}.`
     : maxF.r >= 20 ? `A previsão indica que o quadro deve continuar nos próximos dias, com cerca de ${n0(maxF.r)}% da área nessa situação.`
-    : hoje.r >= 20 ? 'A previsão indica melhora nos próximos dias, com a volta da chuva.' : 'A previsão dos próximos dias não indica falta de água relevante.');
+    : hoje.r >= 20 ? 'A previsão indica melhora nos próximos dias, com a volta da chuva.' : vr('aguaPrev', ['A previsão dos próximos dias não indica falta de água relevante.', 'Para os próximos dias, a previsão não aponta restrição importante.', 'A chuva prevista deve manter esse quadro.']));
   // efeito provável na safra
   const pico = ondas.reduce((b, w) => !b || w.pico.r > b.pico.r ? w : b, null), crP = pico ? critDe(deISO(pico.pico.d)) : 0, crF = maxF ? critDe(deISO(maxF.d)) : 0;
   let ef;
   if (cana) ef = !pico ? 'Para a cana, isso significa crescimento dos colmos sem freio hídrico, bom sinal para a produtividade da próxima colheita.'
     : [4, 5, 6, 7, 8].includes(deISO(pico.pico.d).getMonth()) ? 'Na cana, a restrição na época seca é esperada e até ajuda a concentrar açúcar e a manter o ritmo do corte; o risco está em se prolongar a ponto de comprometer a rebrota das soqueiras.'
     : 'Na cana, falta de água fora da época seca freia o crescimento dos colmos e tende a reduzir a tonelagem por hectare da próxima colheita, sobretudo nos solos arenosos.';
-  else if (!pico && !(maxF && maxF.r >= 20)) ef = 'Do ponto de vista da água, o potencial produtivo segue preservado até aqui.';
+  else if (!pico && !(maxF && maxF.r >= 20)) ef = vr('efOk', ['Do ponto de vista da água, o potencial produtivo segue preservado até aqui.', 'A disponibilidade de água não impôs perdas ao potencial produtivo até agora.', 'Sem falta de água relevante, o clima não é, por ora, um fator de perda para a cultura.']);
   else if (pico && crP < 10 && !(maxF && maxF.r >= 20 && crF >= 10)) ef = 'Como a falta de água pegou as lavouras ainda no início do ciclo, quando a planta exige pouca água e se recupera bem com a volta da chuva, o efeito sobre a produtividade tende a ser pequeno; o ponto de atenção é o estande, com possíveis falhas de germinação nos solos arenosos.';
   else ef = `A falta de água coincidiu ${maxF && maxF.r >= 20 && crF >= 10 ? 'e pode voltar a coincidir ' : ''}com fases em que a planta define o número e o peso dos grãos (florescimento e enchimento). É nesse momento que a restrição mais pesa: se persistir, pode reduzir a produtividade, o que precisa ser confirmado nas vistorias.`;
   if (pico && pico.pico.r >= 25) dest = `no pior momento do período, em ${dExt(deISO(pico.pico.d))}, ${n0(pico.pico.r)}% da área ficou com falta de água`;
@@ -2306,8 +2324,9 @@ function prosaRelatos(cid, filtro) {
     const onde = escp.length > 3 ? `${escp.length} municípios${regs.length ? ` das regiões de ${lista(regs)}` : ''}` : lista(escp.map(nmMun).filter(Boolean));
     const cl = new Set(um('clima').map(f => f.tipo)), motivo = cl.has('excesso') ? 'por causa das chuvas frequentes' : cl.has('falta') ? 'por falta de chuva' : '';
     const pl = um1('plantio'), at = um1('atraso'), pa = um1('paralisacao'), rp = um1('replantio'), pg = um('pragas'), es = [...new Set(um('estadio').flatMap(f => f.itens))];
-    const p1 = [`${quando}, a equipe percorreu ${onde}.`];
-    if (pl || at || pa) { let t = 'Nos municípios visitados, ';
+    const viagemDita = JA_DITO.has('viagem:' + rel.caminho); JA_DITO.add('viagem:' + rel.caminho);
+    const p1 = viagemDita ? [] : [vr('viagem', [`${quando}, a equipe percorreu ${onde}.`, `A viagem de campo de ${quando.replace(/^Entre (\d+) e (\d+)/, '$1 a $2').replace(/^Em /, '')} passou por ${onde}.`, `${quando}, o roteiro da equipe incluiu ${onde}.`])];
+    if (pl || at || pa) { let t = viagemDita ? vr('mesmaViagem', [`Na mesma viagem (${quando.replace(/^Entre (\d+) e (\d+)/, '$1 a $2').replace(/^Em /, '')}), `, 'No mesmo roteiro, ', 'Nessa viagem, ']) : vr('visitados', ['Nos municípios visitados, ', 'Na região percorrida, ', 'Nessas áreas, ']);
       if (pl) t += `o plantio de ${nomeC} estava em cerca de ${pl.pct}% da área prevista${at ? ', com' : ''}`; else if (at) t += `o plantio de ${nomeC} acumulava`;
       if (at) t += ` atraso ${at.min != null ? (at.min === at.max ? `de cerca de ${at.min}%` : `de ${at.min}% a ${at.max}%`) : ''} em relação ao esperado`;
       if (pa) t += `${pl || at ? ', depois de' : `as operações de ${nomeC} ficaram paradas por`} ${pa.dias} dias${pl || at ? ' de máquinas paradas' : ''}`;
@@ -2331,7 +2350,7 @@ function prosaRelatos(cid, filtro) {
       if (pd) { const kg = pd.unid === 'kg/ha' ? pd.valor : pd.valor * 60, marg = kg / prc.kgSaca * prc.valor - cu.valor;
         t += marg < 0 ? `, mas a produtividade média fica em torno de ${n0(kg)} kg. A conta não fecha: o prejuízo estimado é de cerca de R$ ${n0(-marg)} por hectare` : `, e a produtividade média, de cerca de ${n0(kg)} kg, deixa margem estimada de R$ ${n0(marg)} por hectare`; }
       p1.push(t + '.'); }
-    if (um('credito').length) p1.push('O financiamento da lavoura depende sobretudo de revendas e cooperativas, com acesso difícil ao crédito bancário.');
+    if (um('credito').length && !JA_DITO.has('credito:' + rel.caminho)) { JA_DITO.add('credito:' + rel.caminho); p1.push('O financiamento das lavouras depende sobretudo de revendas e cooperativas, com acesso difícil ao crédito bancário.'); }
     // cruzamento com o painel
     const p2 = [], pz = um1('prazo');
     if (sub && Object.keys(sub.mun).length) { const j = semanaDe(c, rel.data), pR = mediaMS(sub, m => acum(m.serie, j)), pE = mediaMS(c, m => acum(m.serie, j)), pA = mediaMS(sub, m => acum(m.serie, j - 2));
@@ -2339,11 +2358,11 @@ function prosaRelatos(cid, filtro) {
         if (at && pE) p2.push(pR.v < pE.v - 5 ? `Esses municípios estão ${n0(pE.v - pR.v)} pontos percentuais atrás da média do estado, o que confirma o atraso.` : `Apesar do atraso relatado, esses municípios avançam no mesmo ritmo do restante do estado (${n0(pR.v)}% semeado, contra ${n0(pE.v)}% na média estadual), o que indica que o atraso é em relação ao calendário habitual da região, e não aos demais municípios.`);
         if (pA && pR.v < 95) { const rit = (pR.v - pA.v) / 2; if (rit >= 1) { const d95 = addD(dataSem(c, j), 7 * Math.ceil((95 - pR.v) / rit));
           p2.push(`No ritmo das duas últimas semanas, de cerca de ${n0(rit)} pontos percentuais por semana, a região deve ultrapassar 95% da área semeada por volta de ${dExt(d95)}${pz ? (d95 > pz.data ? `, depois do prazo de ${dExt(pz.data)} esperado pelos produtores` : `, dentro do prazo de ${dExt(pz.data)} esperado pelos produtores`) : ''}.`); } } } }
-    else if (pz) p2.push(`A expectativa é concluir o plantio até ${dExt(pz.data)}.`);
+    else if (pz) p2.push(vr('prazo', [`A expectativa é concluir o plantio até ${dExt(pz.data)}.`, `Os produtores contam terminar o plantio até ${dExt(pz.data)}.`, `O plantio deve se estender até ${dExt(pz.data)}.`]));
     const cj = (cl.has('excesso') || cl.has('falta')) && CL ? climaJanela(escp, rel.data, 30) : null;
     if (cj) { const umid = pg.some(f => f.itens.some(x => /lesma|caramujo|mofo|antracnose|ferrugem/.test(x)));
-      if (cl.has('excesso')) p2.push(cj.p > cj.e * 1.2 || cj.dch >= 12 || cj.maxSeq >= 4 ? `O clima confirma o relato: nos 30 dias anteriores à viagem, ${cj.dch >= cj.dias ? 'choveu todos os dias' : `choveu em ${cj.dch} dos ${cj.dias} dias`}${umid ? ', ambiente úmido que favorece lesmas, caramujos e doenças, como relatado' : ''}.` : `O clima, no entanto, não mostra chuva fora do normal nos 30 dias anteriores (${n0(cj.p)} mm), o que sugere excesso localizado ou concentrado em poucos dias.`);
-      else p2.push(cj.p - cj.e < -30 || cj.dch <= 4 ? `O clima confirma o relato: nos 30 dias anteriores choveu só ${n0(cj.p)} mm, para uma demanda de ${n0(cj.e)} mm.` : `O clima, porém, indica ${n0(cj.p)} mm nos 30 dias anteriores; a falta de água pode ser localizada.`); }
+      if (cl.has('excesso')) p2.push(cj.p > cj.e * 1.2 || cj.dch >= 12 || cj.maxSeq >= 4 ? `${vr('confClima', ['O clima confirma o relato', 'Os registros de chuva sustentam a observação', 'A informação é compatível com os dados de clima'])}: nos 30 dias anteriores à viagem, ${cj.dch >= cj.dias ? 'choveu todos os dias' : `choveu em ${cj.dch} dos ${cj.dias} dias`}${umid ? ', ambiente úmido que favorece lesmas, caramujos e doenças, como relatado' : ''}.` : `O clima, no entanto, não mostra chuva fora do normal nos 30 dias anteriores (${n0(cj.p)} mm), o que sugere excesso localizado ou concentrado em poucos dias.`);
+      else p2.push(cj.p - cj.e < -30 || cj.dch <= 4 ? `${vr('confClima', ['O clima confirma o relato', 'Os registros de chuva sustentam a observação', 'A informação é compatível com os dados de clima'])}: nos 30 dias anteriores choveu só ${n0(cj.p)} mm, para uma demanda de ${n0(cj.e)} mm.` : `O clima, porém, indica ${n0(cj.p)} mm nos 30 dias anteriores; a falta de água pode ser localizada.`); }
     for (const f of um('conversao')) if (f.escopo.length === 1) { const cd = f.escopo[0], eu = soloClasse('Eucalipto', cd)?.area, sj = soloCultura(cid, cd)?.area;
       if (eu || sj) p2.push(`${nmMun(cd)} tem hoje cerca de ${eu ? `${haTxt(eu)} de eucalipto` : 'pouca área de eucalipto'}${sj ? ` e ${haTxt(sj)} de ${nomeC}` : ''}${sj && f.max ? `; a troca relatada corresponderia a ${n0(100 * f.min / sj)}%${f.max !== f.min ? ` a ${n0(100 * f.max / sj)}%` : ''} da área de ${nomeC} do município, algo a acompanhar nas próximas safras` : ''}.`); }
     out.push(p1.join(' ')); if (p2.length) out.push(p2.join(' '));
@@ -2507,6 +2526,7 @@ function legendaPDF(doc, itens, x, y, CINZA) {
 }
 // ---------- documento ----------
 async function gerarPDF(ini, fim, sel, opts) {
+  ROT_TXT = {}; JA_DITO = new Set();
   await carregarScript(LIBS.jspdf); await carregarScript(LIBS.autotable);
   const {jsPDF} = window.jspdf, doc = new jsPDF({unit: 'mm', format: 'a4'}), W = 210, M = 18;
   const logo = await imagemDataURL('img/logo_conab.png').catch(() => null);
@@ -2551,6 +2571,7 @@ async function gerarPDF(ini, fim, sel, opts) {
   if (serieT.length) { const p = serieT.reduce((t, x) => t + x.p, 0), e = serieT.reduce((t, x) => t + x.e, 0);
     txt(`Entre ${dExt(ini)} e ${dExt(fim)}, as áreas agrícolas do estado receberam em média ${n0(p)} mm de chuva, ${p > e * 1.15 ? 'mais do que' : p < e * .85 ? 'menos do que' : 'praticamente o mesmo que'} o solo e as plantas perderam por evaporação no mesmo período (${n0(e)} mm). ${historiaTempo(serieT)}`); }
   txt(A.map(a => a.manchete).join(' '));
+  A.forEach(a => { if (a.serie?.length) a.txtTempo = tempoRelativo(a.serie, serieT, a.cana ? 'os canaviais' : `as áreas de ${a.nomeC}`, a.cana ? 'nos canaviais' : `nas áreas de ${a.nomeC}`); });
   y += 2;
   for (const a of A) { garantir(24); doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(...TINTA); doc.text(pdfTxt(a.n), M, y); y += 4.5;
     const hj = a.R?.filter(x => !x.prev && x.r != null).at(-1);
